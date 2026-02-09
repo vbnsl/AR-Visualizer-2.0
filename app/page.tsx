@@ -155,6 +155,7 @@ export default function VisualizerPage() {
                 <TileOverlayCanvas
                   corners={corners}
                   tileImageUrl={selectedTile?.imageUrl ?? null}
+                  tileSizeMm={selectedTile?.sizeMm}
                   width={containerSize.width}
                   height={containerSize.height}
                 />
