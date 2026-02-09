@@ -1,26 +1,36 @@
 "use client";
 
 import { useRef, useEffect, useState } from "react";
+import { renderTiledWall, type Quad } from "@/lib/tiledWall";
 
 export interface Point {
   x: number;
   y: number;
 }
 
+/** Default wall size in mm when using tiled render (standard wall ~3m x 2.4m). */
+const DEFAULT_WALL_WIDTH_MM = 3000;
+const DEFAULT_WALL_HEIGHT_MM = 2400;
+/** Default tile size in mm (30cm x 30cm) when catalog has no sizeMm. */
+const DEFAULT_TILE_SIZE_MM = { width: 300, height: 300 };
+
 interface TileOverlayCanvasProps {
   corners: Point[];
   tileImageUrl: string | null;
+  /** Tile size in mm (from catalog). If set, uses renderTiledWall for repeating pattern. */
+  tileSizeMm?: { width: number; height: number };
   width: number;
   height: number;
 }
 
 /**
- * 2D canvas overlay that draws the tile image exactly inside the quad defined by the 4 corners.
- * Uses two triangles with affine mapping so the texture fills the quad (no 3D unprojection).
+ * 2D canvas overlay: draws the tile inside the quad. If tileSizeMm is provided,
+ * uses renderTiledWall (createPattern + perspective warp); otherwise single image warp.
  */
 export default function TileOverlayCanvas({
   corners,
   tileImageUrl,
+  tileSizeMm,
   width,
   height,
 }: TileOverlayCanvasProps) {
@@ -60,54 +70,18 @@ export default function TileOverlayCanvas({
     canvas.height = height;
     ctx.clearRect(0, 0, width, height);
 
-    const [p0, p1, p2, p3] = corners; // top-left, top-right, bottom-right, bottom-left
+    const quad: Quad = [corners[0], corners[1], corners[2], corners[3]];
 
-    const w = img.naturalWidth;
-    const h = img.naturalHeight;
-
-    const drawTriangle = (
-      x0: number,
-      y0: number,
-      x1: number,
-      y1: number,
-      x2: number,
-      y2: number,
-      tx0: number,
-      ty0: number,
-      tx1: number,
-      ty1: number,
-      tx2: number,
-      ty2: number
-    ) => {
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.closePath();
-      ctx.clip();
-      // Affine map: (tx0,ty0)->(x0,y0), (tx1,ty1)->(x1,y1), (tx2,ty2)->(x2,y2)
-      const denom = (tx1 - tx0) * (ty2 - ty0) - (ty1 - ty0) * (tx2 - tx0);
-      if (Math.abs(denom) < 1e-10) {
-        ctx.restore();
-        return;
-      }
-      const a = ((x1 - x0) * (ty2 - ty0) - (x2 - x0) * (ty1 - ty0)) / denom;
-      const b = ((x2 - x0) * (tx1 - tx0) - (x1 - x0) * (tx2 - tx0)) / denom;
-      const c = ((y1 - y0) * (ty2 - ty0) - (y2 - y0) * (ty1 - ty0)) / denom;
-      const d = ((y2 - y0) * (tx1 - tx0) - (y1 - y0) * (tx2 - tx0)) / denom;
-      const e = x0 - a * tx0 - b * ty0;
-      const f = y0 - c * tx0 - d * ty0;
-      ctx.setTransform(a, c, b, d, e, f);
-      ctx.drawImage(img, 0, 0, w, h, 0, 0, w, h);
-      ctx.restore();
+    const tileMm =
+      tileSizeMm && tileSizeMm.width > 0 && tileSizeMm.height > 0
+        ? tileSizeMm
+        : DEFAULT_TILE_SIZE_MM;
+    const wallSizeMm = {
+      width: DEFAULT_WALL_WIDTH_MM,
+      height: DEFAULT_WALL_HEIGHT_MM,
     };
-
-    // Triangle 1: top-left, top-right, bottom-right. Texture: (0,0), (w,0), (w,h)
-    drawTriangle(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, 0, 0, w, 0, w, h);
-    // Triangle 2: top-left, bottom-right, bottom-left. Texture: (0,0), (w,h), (0,h)
-    drawTriangle(p0.x, p0.y, p2.x, p2.y, p3.x, p3.y, 0, 0, w, h, 0, h);
-  }, [corners, imageReady, width, height]);
+    renderTiledWall(ctx, quad, img, tileMm, wallSizeMm);
+  }, [corners, imageReady, width, height, tileSizeMm]);
 
   if (corners.length !== 4 || !tileImageUrl || !width || !height)
     return null;
