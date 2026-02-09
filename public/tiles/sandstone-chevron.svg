@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+  <defs>
+    <linearGradient id="sand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d9b38c"/>
+      <stop offset="100%" stop-color="#b4834f"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="#cfa57b"/>
+  <g stroke="#925f2e" stroke-width="6" opacity="0.4" fill="none">
+    <path d="M0 50 L50 0 L100 50 L150 0 L200 50 L250 0 L300 50 L350 0 L400 50"/>
+    <path d="M0 150 L50 100 L100 150 L150 100 L200 150 L250 100 L300 150 L350 100 L400 150"/>
+    <path d="M0 250 L50 200 L100 250 L150 200 L200 250 L250 200 L300 250 L350 200 L400 250"/>
+    <path d="M0 350 L50 300 L100 350 L150 300 L200 350 L250 300 L300 350 L350 300 L400 350"/>
+  </g>
+  <rect width="400" height="400" fill="url(#sand)" opacity="0.2"/>
+</svg>
