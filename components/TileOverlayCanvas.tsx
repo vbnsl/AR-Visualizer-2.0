@@ -2,6 +2,23 @@
 
 import { useRef, useEffect, useState } from "react";
 import { renderTiledWall, type Quad } from "@/lib/tiledWall";
+import {
+  buildWallMask,
+  buildOcclusionMask,
+  occlusionMaskToWallMask,
+  createQuadMaskImageData,
+  combineMasks,
+  smoothWallMask,
+} from "@/lib/occlusionMask";
+import type { DepthResult } from "@/lib/depth";
+
+function createCanvasFromImageData(id: ImageData): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = id.width;
+  c.height = id.height;
+  c.getContext("2d")?.putImageData(id, 0, 0);
+  return c;
+}
 
 export interface Point {
   x: number;
@@ -21,6 +38,14 @@ interface TileOverlayCanvasProps {
   tileSizeMm?: { width: number; height: number };
   width: number;
   height: number;
+  /** Optional depth map for occlusion (tile only where depth is "wall"). */
+  depthMap?: DepthResult | null;
+  /** If true, depth model uses higher value = closer (wall = lower depth). If false, higher = farther. */
+  depthCloserIsHigher?: boolean;
+  /** Optional DeepLab wall mask (alpha 255 = wall). Used when depth is unavailable. */
+  wallMask?: ImageData | null;
+  /** Room image URL for edge-based occlusion when depth and wall mask unavailable. */
+  roomImageUrl?: string | null;
 }
 
 /**
@@ -33,10 +58,15 @@ export default function TileOverlayCanvas({
   tileSizeMm,
   width,
   height,
+  depthMap,
+  depthCloserIsHigher = true,
+  wallMask,
+  roomImageUrl,
 }: TileOverlayCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [imageReady, setImageReady] = useState(false);
+  const [edgeMask, setEdgeMask] = useState<ImageData | null>(null);
 
   useEffect(() => {
     if (!tileImageUrl) {
@@ -56,6 +86,27 @@ export default function TileOverlayCanvas({
       imageRef.current = null;
     };
   }, [tileImageUrl]);
+
+  useEffect(() => {
+    if (!roomImageUrl || !width || !height) {
+      setEdgeMask(null);
+      return;
+    }
+    setEdgeMask(null);
+    const roomImg = new Image();
+    roomImg.crossOrigin = "anonymous";
+    roomImg.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = width;
+      c.height = height;
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(roomImg, 0, 0, width, height);
+      const imageData = ctx.getImageData(0, 0, width, height);
+      setEdgeMask(occlusionMaskToWallMask(buildOcclusionMask(imageData)));
+    };
+    roomImg.src = roomImageUrl;
+  }, [roomImageUrl, width, height]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -80,8 +131,75 @@ export default function TileOverlayCanvas({
       width: DEFAULT_WALL_WIDTH_MM,
       height: DEFAULT_WALL_HEIGHT_MM,
     };
-    renderTiledWall(ctx, quad, img, tileMm, wallSizeMm);
-  }, [corners, imageReady, width, height, tileSizeMm]);
+
+    const quadMask = createQuadMaskImageData(width, height, quad);
+    const smoothOpts = { closeRadius: 3, edgeBlurPx: 2 };
+    let occlusionMask: ImageData | null = null;
+    if (depthMap) {
+      const raw = buildWallMask(
+        depthMap.depth,
+        depthMap.width,
+        depthMap.height,
+        quad,
+        width,
+        height,
+        0.15,
+        depthCloserIsHigher
+      );
+      occlusionMask = smoothWallMask(raw, smoothOpts);
+    } else if (wallMask) {
+      let raw: ImageData | null = null;
+      if (wallMask.width === width && wallMask.height === height) {
+        raw = wallMask;
+      } else {
+        const scaled = document.createElement("canvas");
+        scaled.width = width;
+        scaled.height = height;
+        const sctx = scaled.getContext("2d");
+        if (sctx) {
+          sctx.drawImage(
+            createCanvasFromImageData(wallMask),
+            0,
+            0,
+            wallMask.width,
+            wallMask.height,
+            0,
+            0,
+            width,
+            height
+          );
+          raw = sctx.getImageData(0, 0, width, height);
+        }
+      }
+      if (raw) occlusionMask = smoothWallMask(raw, smoothOpts);
+    }
+    if (!occlusionMask) occlusionMask = edgeMask ? smoothWallMask(edgeMask, smoothOpts) : null;
+
+    const mask = occlusionMask
+      ? combineMasks(width, height, quadMask, occlusionMask)
+      : quadMask;
+
+    const off = document.createElement("canvas");
+    off.width = width;
+    off.height = height;
+    const offCtx = off.getContext("2d");
+    if (offCtx) {
+      renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm);
+      ctx.drawImage(off, 0, 0);
+      ctx.globalCompositeOperation = "destination-in";
+      const maskCanvas = document.createElement("canvas");
+      maskCanvas.width = width;
+      maskCanvas.height = height;
+      const maskCtx = maskCanvas.getContext("2d");
+      if (maskCtx) {
+        maskCtx.putImageData(mask, 0, 0);
+        ctx.drawImage(maskCanvas, 0, 0);
+      }
+      ctx.globalCompositeOperation = "source-over";
+    } else {
+      renderTiledWall(ctx, quad, img, tileMm, wallSizeMm);
+    }
+  }, [corners, imageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask]);
 
   if (corners.length !== 4 || !tileImageUrl || !width || !height)
     return null;
