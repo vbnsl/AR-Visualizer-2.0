@@ -89,6 +89,8 @@ function drawQuadWarp(
 }
 
 export interface RenderTiledWallOptions {
+  /** Lighting map (bbox size); applied with multiply blend. */
+  lightingCanvas?: HTMLCanvasElement | null;
   /** Monochrome noise opacity 0–1 (e.g. 0.015 for ~1.5%) to break repetition. */
   noiseOpacity?: number;
 }
@@ -154,6 +156,13 @@ export function renderTiledWall(
   offCtx.fillStyle = pattern;
   offCtx.fillRect(0, 0, wallWidthPx / scaleX, wallHeightPx / scaleY);
   offCtx.restore();
+
+  const lightingCanvas = options?.lightingCanvas;
+  if (lightingCanvas && lightingCanvas.width === wallWidthPx && lightingCanvas.height === wallHeightPx) {
+    offCtx.globalCompositeOperation = "multiply";
+    offCtx.drawImage(lightingCanvas, 0, 0, wallWidthPx, wallHeightPx);
+    offCtx.globalCompositeOperation = "source-over";
+  }
 
   const noiseOpacity = options?.noiseOpacity ?? 0;
   if (noiseOpacity > 0) {

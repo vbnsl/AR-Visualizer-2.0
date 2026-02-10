@@ -10,7 +10,9 @@ import {
   smoothWallMask,
 } from "@/lib/occlusionMask";
 import { createFeatheredQuadMask } from "@/lib/featherMask";
+import { extractLightingMap } from "@/lib/lightingMap";
 import type { DepthResult } from "@/lib/depth";
+import { quadToBBox } from "@/lib/tiledWall";
 
 function createCanvasFromImageData(id: ImageData): HTMLCanvasElement {
   const c = document.createElement("canvas");
@@ -67,7 +69,9 @@ export default function TileOverlayCanvas({
 }: TileOverlayCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const roomImageRef = useRef<HTMLImageElement | null>(null);
   const [imageReady, setImageReady] = useState(false);
+  const [roomImageReady, setRoomImageReady] = useState(false);
   const [edgeMask, setEdgeMask] = useState<ImageData | null>(null);
 
   useEffect(() => {
@@ -91,13 +95,18 @@ export default function TileOverlayCanvas({
 
   useEffect(() => {
     if (!roomImageUrl || !width || !height) {
+      roomImageRef.current = null;
+      setRoomImageReady(false);
       setEdgeMask(null);
       return;
     }
     setEdgeMask(null);
+    setRoomImageReady(false);
     const roomImg = new Image();
     roomImg.crossOrigin = "anonymous";
     roomImg.onload = () => {
+      roomImageRef.current = roomImg;
+      setRoomImageReady(true);
       const c = document.createElement("canvas");
       c.width = width;
       c.height = height;
@@ -108,6 +117,9 @@ export default function TileOverlayCanvas({
       setEdgeMask(occlusionMaskToWallMask(buildOcclusionMask(imageData)));
     };
     roomImg.src = roomImageUrl;
+    return () => {
+      roomImageRef.current = null;
+    };
   }, [roomImageUrl, width, height]);
 
   useEffect(() => {
@@ -181,12 +193,32 @@ export default function TileOverlayCanvas({
       ? combineMasks(width, height, quadMask, occlusionMask)
       : quadMask;
 
+    let lightingCanvas: HTMLCanvasElement | null = null;
+    if (roomImageRef.current && occlusionMask) {
+      lightingCanvas = extractLightingMap(
+        roomImageRef.current,
+        quad,
+        width,
+        height,
+        occlusionMask
+      );
+    }
+    const bbox = quadToBBox(quad);
+    const wallW = Math.max(1, bbox.width);
+    const wallH = Math.max(1, bbox.height);
+    if (lightingCanvas && (lightingCanvas.width !== wallW || lightingCanvas.height !== wallH)) {
+      lightingCanvas = null;
+    }
+
     const off = document.createElement("canvas");
     off.width = width;
     off.height = height;
     const offCtx = off.getContext("2d");
     if (offCtx) {
-      renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm, { noiseOpacity: NOISE_OPACITY });
+      renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm, {
+        lightingCanvas: lightingCanvas ?? undefined,
+        noiseOpacity: NOISE_OPACITY,
+      });
       ctx.drawImage(off, 0, 0);
       ctx.globalCompositeOperation = "destination-in";
       const maskCanvas = document.createElement("canvas");
@@ -199,9 +231,12 @@ export default function TileOverlayCanvas({
       }
       ctx.globalCompositeOperation = "source-over";
     } else {
-      renderTiledWall(ctx, quad, img, tileMm, wallSizeMm, { noiseOpacity: NOISE_OPACITY });
+      renderTiledWall(ctx, quad, img, tileMm, wallSizeMm, {
+        lightingCanvas: lightingCanvas ?? undefined,
+        noiseOpacity: NOISE_OPACITY,
+      });
     }
-  }, [corners, imageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask]);
+  }, [corners, imageReady, roomImageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask]);
 
   if (corners.length !== 4 || !tileImageUrl || !width || !height)
     return null;
