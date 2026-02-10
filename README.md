@@ -27,12 +27,13 @@ Open [http://localhost:3000](http://localhost:3000).
 ## Project structure
 
 - `app/page.tsx` — main visualizer page and state
-- `components/VisualizerCanvas.tsx` — R3F scene (background + wall plane)
+- `components/VisualizerCanvas.tsx` — R3F scene (room background)
+- `components/TileOverlayCanvas.tsx` — 2D canvas overlay (tiled pattern + perspective warp)
 - `components/CornerHandles.tsx` — draggable corner markers
 - `components/TilePicker.tsx` — tile product grid
 - `components/ImageUpload.tsx` — file input and sample room
 - `lib/catalog.ts` — tile product list
-- `lib/wallGeometry.ts` — unproject screen points to 3D and build wall quad
+- `lib/tiledWall.ts` — tiled pattern rendering and quad warp
 - `public/tiles/` — tile images (see below for adding your own)
 - `public/sample-room.jpg` — default room image
 
@@ -44,8 +45,15 @@ Open [http://localhost:3000](http://localhost:3000).
 - **Display names** are generated from filenames (e.g. `my-marble-tile.jpg` → “My Marble Tile”). Use hyphens or underscores for multi-word names.  
 - Refresh the page after adding or removing files to see the updated list.
 
-## Later ideas
+## Occlusion strategy
 
-- Occlusion (objects in front of the wall)
-- Floor visualization (second quad)
-- Side-by-side comparison, save/load designs, backend catalog
+**Current:** The tile overlay is drawn on a 2D canvas over the full image, so tiles appear on top of everything (TV, furniture, etc.). There is no occlusion yet.
+
+**Planned approach (depth-based):** Use **monocular depth estimation** on the room photo to get a per-pixel depth map. The **manual quad** defines the wall: sample depth at the quad (e.g. median inside the quad or at the four corners) to get “wall depth.” Then draw the tile only where depth is close to that value; pixels with “closer” depth (TV, furniture) keep the original image, so they occlude the tiles. This fits the existing flow: the user already picks the wall; occlusion simply respects “things in front of this surface.”
+
+**Alternatives for later:**
+
+- **Segmentation** — Segment “wall” vs “foreground” and mask the tile to the wall class. Simpler conceptually but must align with the user’s quad; can mislabel in multi-wall or cluttered scenes.
+- **Manual occlusion brush** — Let the user paint regions that are in front (e.g. over the TV). No model dependency; useful to refine edges after depth-based occlusion.
+- **Refinement** — Erode the depth mask slightly at boundaries, or use a small tolerance band around wall depth, to reduce jagged edges and thin false occluders.
+- **WebGL + depth texture** — If depth runs in a pipeline anyway, composite the tile in a fragment shader that samples depth and discards foreground pixels for better performance at high resolution.

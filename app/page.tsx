@@ -7,14 +7,24 @@ import CornerHandles, { type Point } from "@/components/CornerHandles";
 import VisualizerCanvas from "@/components/VisualizerCanvas";
 import TileOverlayCanvas from "@/components/TileOverlayCanvas";
 import { TILE_CATALOG, type TileProduct } from "@/lib/catalog";
+import { estimateDepth, type DepthResult } from "@/lib/depth";
+import { segmentWall } from "@/lib/wallSegmentation";
 
 export default function VisualizerPage() {
   const [roomImageUrl, setRoomImageUrl] = useState<string | null>(null);
   const [corners, setCorners] = useState<Point[]>([]);
   const [selectedTile, setSelectedTile] = useState<TileProduct | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [depthMap, setDepthMap] = useState<DepthResult | null>(null);
+  const [depthLoading, setDepthLoading] = useState(false);
+  const [depthError, setDepthError] = useState<string | null>(null);
+  const [wallMask, setWallMask] = useState<ImageData | null>(null);
+  const [wallMaskLoading, setWallMaskLoading] = useState(false);
+  const [wallMaskError, setWallMaskError] = useState<string | null>(null);
+  const [depthCloserIsHigher, setDepthCloserIsHigher] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const compositeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -30,6 +40,28 @@ export default function VisualizerPage() {
   const handleImageLoad = useCallback((url: string) => {
     setRoomImageUrl(url);
     setCorners([]);
+    setDepthMap(null);
+    setDepthError(null);
+    setWallMask(null);
+    setWallMaskError(null);
+    setDepthLoading(true);
+    setWallMaskLoading(true);
+    estimateDepth(url)
+      .then(setDepthMap)
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "Depth failed";
+        console.error("[depth]", "Estimate failed:", msg, err);
+        setDepthError(msg);
+      })
+      .finally(() => setDepthLoading(false));
+    segmentWall(url, 512, 512)
+      .then((res) => (res ? setWallMask(res.mask) : setWallMask(null)))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "Wall segmentation failed";
+        console.warn("[wall-seg]", msg, err);
+        setWallMaskError(msg);
+      })
+      .finally(() => setWallMaskLoading(false));
   }, []);
 
   const handleCanvasClick = useCallback(
@@ -55,9 +87,21 @@ export default function VisualizerPage() {
   const handleResetCorners = useCallback(() => setCorners([]), []);
 
   const handleDownload = useCallback(() => {
-    const canvas = canvasContainerRef.current?.querySelector("canvas");
-    if (!canvas) return;
-    const url = canvas.toDataURL("image/png");
+    const container = compositeRef.current;
+    const canvases = container?.querySelectorAll("canvas");
+    if (!canvases?.length) return;
+    const roomCanvas = canvases[0] as HTMLCanvasElement;
+    const overlayCanvas = canvases.length >= 2 ? (canvases[1] as HTMLCanvasElement) : null;
+    const w = overlayCanvas ? overlayCanvas.width : roomCanvas.width;
+    const h = overlayCanvas ? overlayCanvas.height : roomCanvas.height;
+    const off = document.createElement("canvas");
+    off.width = w;
+    off.height = h;
+    const ctx = off.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(roomCanvas, 0, 0, roomCanvas.width, roomCanvas.height, 0, 0, w, h);
+    if (overlayCanvas) ctx.drawImage(overlayCanvas, 0, 0);
+    const url = off.toDataURL("image/png");
     const a = document.createElement("a");
     a.href = url;
     a.download = "tile-visualizer-result.png";
@@ -88,6 +132,37 @@ export default function VisualizerPage() {
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
                   Wall corners
                 </p>
+                {(depthLoading || wallMaskLoading) && (
+                  <p className="mb-2 text-sm text-amber-400">
+                    Computing depth &amp; wall detection…
+                  </p>
+                )}
+                {depthError && (
+                  <p className="mb-2 text-sm text-red-400" title={depthError}>
+                    Depth: {depthError}
+                  </p>
+                )}
+                {wallMaskError && !depthMap && (
+                  <p className="mb-2 text-sm text-amber-500" title={wallMaskError}>
+                    Wall detection: {wallMaskError}
+                  </p>
+                )}
+                {(depthMap || wallMask) && !depthLoading && !wallMaskLoading && (
+                  <p className="mb-2 text-sm text-slate-500">
+                    Occlusion ready {depthMap ? "(depth)" : wallMask ? "(DeepLab wall)" : ""}
+                  </p>
+                )}
+                {depthMap && (
+                  <label className="mb-2 flex items-center gap-2 text-sm text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={depthCloserIsHigher}
+                      onChange={(e) => setDepthCloserIsHigher(e.target.checked)}
+                      className="rounded border-slate-600 bg-slate-800"
+                    />
+                    Depth: higher = closer (toggle if wall/objects are swapped)
+                  </label>
+                )}
                 <p className="mb-2 text-sm text-slate-400">
                   {corners.length < 4
                     ? `Click on the image to place corner ${corners.length + 1} of 4 (top-left → top-right → bottom-right → bottom-left).`
@@ -139,6 +214,7 @@ export default function VisualizerPage() {
               role="presentation"
             >
               <div
+                ref={compositeRef}
                 className="absolute inset-0"
                 style={{
                   cursor: canPlaceCorners ? "crosshair" : "default",
@@ -158,6 +234,10 @@ export default function VisualizerPage() {
                   tileSizeMm={selectedTile?.sizeMm}
                   width={containerSize.width}
                   height={containerSize.height}
+                  depthMap={depthMap}
+                  depthCloserIsHigher={depthCloserIsHigher}
+                  wallMask={wallMask}
+                  roomImageUrl={roomImageUrl}
                 />
               </div>
               {roomImageUrl && corners.length > 0 && (
