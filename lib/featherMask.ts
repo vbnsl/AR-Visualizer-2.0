@@ -1,5 +1,9 @@
 /**
  * Feathered alpha mask at the quad boundary for smooth tile edges.
+ *
+ * Used by the overlay so the tile doesn't end in a hard line: alpha 255 inside the quad,
+ * 0 outside, with a smooth transition over featherPx pixels (box blur on the binary mask).
+ * Combine with occlusion mask and use destination-in when drawing the tile.
  */
 
 import type { Quad } from "./tiledWall";
@@ -52,7 +56,8 @@ function blurAlpha(
 }
 
 /**
- * Creates an ImageData mask with alpha 255 inside the quad, fading to 0 over featherPx at the boundary.
+ * Creates an ImageData mask: alpha 255 inside quad, 0 outside, smooth falloff over featherPx at the boundary.
+ * Same size as overlay (width × height). Use with destination-in to soft-clip the tile.
  */
 export function createFeatheredQuadMask(
   width: number,

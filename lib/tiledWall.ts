@@ -1,5 +1,11 @@
 /**
  * 2D canvas-based tile visualizer: tiled pattern with createPattern(), then perspective warp to quad.
+ *
+ * Pipeline (renderTiledWall):
+ * 1. Fill offscreen canvas with repeating tile pattern (createPattern + scale to match tile count).
+ * 2. Optional: multiply by lighting map (darkens tile where room is darker; requires wall-only map).
+ * 3. Optional: overlay subtle monochrome noise to break repetition.
+ * 4. Warp offscreen result to the destination quad (drawQuadWarp).
  */
 
 export interface Point2D {
@@ -88,10 +94,11 @@ function drawQuadWarp(
   drawTriangle(p0.x, p0.y, p2.x, p2.y, p3.x, p3.y, 0, 0, sourceWidth, sourceHeight, 0, sourceHeight);
 }
 
+/** Options for renderTiledWall: lighting, noise, and optional grout. All applied before the final warp. */
 export interface RenderTiledWallOptions {
-  /** Lighting map (bbox size); applied with multiply blend. */
+  /** Lighting map canvas (size = wall bbox). Applied with multiply blend so tile follows room lighting. */
   lightingCanvas?: HTMLCanvasElement | null;
-  /** Monochrome noise opacity 0–1 (e.g. 0.015 for ~1.5%) to break repetition. */
+  /** Monochrome noise opacity 0–1 (e.g. 0.015 = 1.5%) to break tile repetition; 0 = off. */
   noiseOpacity?: number;
 }
 
@@ -157,6 +164,7 @@ export function renderTiledWall(
   offCtx.fillRect(0, 0, wallWidthPx / scaleX, wallHeightPx / scaleY);
   offCtx.restore();
 
+  // --- Lighting: multiply by wall lighting map (only when provided; avoids TV/chair shadows if map is wall-only) ---
   const lightingCanvas = options?.lightingCanvas;
   if (lightingCanvas && lightingCanvas.width === wallWidthPx && lightingCanvas.height === wallHeightPx) {
     offCtx.globalCompositeOperation = "multiply";
@@ -164,6 +172,7 @@ export function renderTiledWall(
     offCtx.globalCompositeOperation = "source-over";
   }
 
+  // --- Micro noise: overlay subtle random gray to break visible repetition ---
   const noiseOpacity = options?.noiseOpacity ?? 0;
   if (noiseOpacity > 0) {
     const noise = document.createElement("canvas");

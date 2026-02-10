@@ -1,6 +1,12 @@
 /**
  * Occlusion masks: depth-based (wall vs foreground) or edge-based (smooth wall vs objects).
- * Mask alpha 255 = show tile (wall), 0 = punch through (show room photo).
+ *
+ * Convention: "wall mask" = alpha 255 where we show tile, 0 = punch through (show room).
+ * "Occlusion mask" from buildOcclusionMask is the opposite (255 = punch through); use
+ * occlusionMaskToWallMask() to convert for the overlay pipeline.
+ *
+ * Overlay uses: quad feathered mask × occlusion (depth or DeepLab or edge) → combineMasks → destination-in.
+ * smoothWallMask() reduces holes and jagged edges before combining.
  */
 
 import type { Quad } from "./tiledWall";
@@ -80,10 +86,9 @@ export function combineMasks(
 }
 
 /**
- * Builds an occlusion mask highlighting wall-mounted objects (TV, furniture, etc.)
- * using edge detection + dilation so we can punch through and show the photo there.
- * Returns ImageData with 255 at edges/objects (punch through), 0 elsewhere.
- * Use occlusionMaskToWallMask() to get 255 = show tile for the overlay pipeline.
+ * Builds an occlusion mask from the room image: edges (Sobel) → threshold (avg * 0.85) → dilation → blur.
+ * Returns ImageData with alpha 255 at edges/objects (punch through), 0 = wall. Use occlusionMaskToWallMask()
+ * to get 255 = show tile for the overlay. dilationIterations controls how far edges expand (default 6).
  */
 export function buildOcclusionMask(imageData: ImageData, dilationIterations = 6): ImageData {
   const { width, height, data } = imageData;
