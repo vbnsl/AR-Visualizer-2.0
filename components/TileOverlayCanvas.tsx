@@ -6,10 +6,10 @@ import {
   buildWallMask,
   buildOcclusionMask,
   occlusionMaskToWallMask,
-  createQuadMaskImageData,
   combineMasks,
   smoothWallMask,
 } from "@/lib/occlusionMask";
+import { createFeatheredQuadMask } from "@/lib/featherMask";
 import type { DepthResult } from "@/lib/depth";
 
 function createCanvasFromImageData(id: ImageData): HTMLCanvasElement {
@@ -30,6 +30,8 @@ const DEFAULT_WALL_WIDTH_MM = 3000;
 const DEFAULT_WALL_HEIGHT_MM = 2400;
 /** Default tile size in mm (30cm x 30cm) when catalog has no sizeMm. */
 const DEFAULT_TILE_SIZE_MM = { width: 300, height: 300 };
+const FEATHER_PX = 5;
+const NOISE_OPACITY = 0.015;
 
 interface TileOverlayCanvasProps {
   corners: Point[];
@@ -132,7 +134,7 @@ export default function TileOverlayCanvas({
       height: DEFAULT_WALL_HEIGHT_MM,
     };
 
-    const quadMask = createQuadMaskImageData(width, height, quad);
+    const quadMask = createFeatheredQuadMask(width, height, quad, FEATHER_PX);
     const smoothOpts = { closeRadius: 3, edgeBlurPx: 2 };
     let occlusionMask: ImageData | null = null;
     if (depthMap) {
@@ -184,7 +186,7 @@ export default function TileOverlayCanvas({
     off.height = height;
     const offCtx = off.getContext("2d");
     if (offCtx) {
-      renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm);
+      renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm, { noiseOpacity: NOISE_OPACITY });
       ctx.drawImage(off, 0, 0);
       ctx.globalCompositeOperation = "destination-in";
       const maskCanvas = document.createElement("canvas");
@@ -197,7 +199,7 @@ export default function TileOverlayCanvas({
       }
       ctx.globalCompositeOperation = "source-over";
     } else {
-      renderTiledWall(ctx, quad, img, tileMm, wallSizeMm);
+      renderTiledWall(ctx, quad, img, tileMm, wallSizeMm, { noiseOpacity: NOISE_OPACITY });
     }
   }, [corners, imageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask]);
 

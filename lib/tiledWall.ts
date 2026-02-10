@@ -88,6 +88,11 @@ function drawQuadWarp(
   drawTriangle(p0.x, p0.y, p2.x, p2.y, p3.x, p3.y, 0, 0, sourceWidth, sourceHeight, 0, sourceHeight);
 }
 
+export interface RenderTiledWallOptions {
+  /** Monochrome noise opacity 0–1 (e.g. 0.015 for ~1.5%) to break repetition. */
+  noiseOpacity?: number;
+}
+
 /**
  * Renders a repeating tile pattern that fills the wall area, then draws it warped to the quad.
  *
@@ -101,13 +106,15 @@ function drawQuadWarp(
  * @param tileImage - Tile image (will be used with createPattern; aspect preserved)
  * @param tileSizeMM - Real-world tile size in mm
  * @param wallSizeMM - Real-world wall size in mm
+ * @param options - Optional micro noise
  */
 export function renderTiledWall(
   ctx: CanvasRenderingContext2D,
   wallQuad: Quad,
   tileImage: HTMLImageElement,
   tileSizeMM: SizeMM,
-  wallSizeMM: SizeMM
+  wallSizeMM: SizeMM,
+  options?: RenderTiledWallOptions
 ): void {
   const bbox = quadToBBox(wallQuad);
   const wallWidthPx = bbox.width;
@@ -147,6 +154,29 @@ export function renderTiledWall(
   offCtx.fillStyle = pattern;
   offCtx.fillRect(0, 0, wallWidthPx / scaleX, wallHeightPx / scaleY);
   offCtx.restore();
+
+  const noiseOpacity = options?.noiseOpacity ?? 0;
+  if (noiseOpacity > 0) {
+    const noise = document.createElement("canvas");
+    noise.width = wallWidthPx;
+    noise.height = wallHeightPx;
+    const nCtx = noise.getContext("2d");
+    if (nCtx) {
+      const id = nCtx.createImageData(wallWidthPx, wallHeightPx);
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = Math.floor(256 * Math.random());
+        d[i] = d[i + 1] = d[i + 2] = v;
+        d[i + 3] = 255;
+      }
+      nCtx.putImageData(id, 0, 0);
+      offCtx.globalAlpha = noiseOpacity;
+      offCtx.globalCompositeOperation = "overlay";
+      offCtx.drawImage(noise, 0, 0);
+      offCtx.globalAlpha = 1;
+      offCtx.globalCompositeOperation = "source-over";
+    }
+  }
 
   // Perspective warp: draw the tiled offscreen canvas onto the destination quad
   drawQuadWarp(ctx, off, wallQuad, wallWidthPx, wallHeightPx);
