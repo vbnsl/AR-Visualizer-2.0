@@ -6,11 +6,13 @@ import {
   buildWallMask,
   buildOcclusionMask,
   occlusionMaskToWallMask,
-  createQuadMaskImageData,
   combineMasks,
   smoothWallMask,
 } from "@/lib/occlusionMask";
+import { createFeatheredQuadMask } from "@/lib/featherMask";
+import { extractLightingMap } from "@/lib/lightingMap";
 import type { DepthResult } from "@/lib/depth";
+import { quadToBBox } from "@/lib/tiledWall";
 
 function createCanvasFromImageData(id: ImageData): HTMLCanvasElement {
   const c = document.createElement("canvas");
@@ -30,6 +32,8 @@ const DEFAULT_WALL_WIDTH_MM = 3000;
 const DEFAULT_WALL_HEIGHT_MM = 2400;
 /** Default tile size in mm (30cm x 30cm) when catalog has no sizeMm. */
 const DEFAULT_TILE_SIZE_MM = { width: 300, height: 300 };
+const FEATHER_PX = 5;
+const NOISE_OPACITY = 0.015;
 
 interface TileOverlayCanvasProps {
   corners: Point[];
@@ -65,7 +69,9 @@ export default function TileOverlayCanvas({
 }: TileOverlayCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const roomImageRef = useRef<HTMLImageElement | null>(null);
   const [imageReady, setImageReady] = useState(false);
+  const [roomImageReady, setRoomImageReady] = useState(false);
   const [edgeMask, setEdgeMask] = useState<ImageData | null>(null);
 
   useEffect(() => {
@@ -89,13 +95,18 @@ export default function TileOverlayCanvas({
 
   useEffect(() => {
     if (!roomImageUrl || !width || !height) {
+      roomImageRef.current = null;
+      setRoomImageReady(false);
       setEdgeMask(null);
       return;
     }
     setEdgeMask(null);
+    setRoomImageReady(false);
     const roomImg = new Image();
     roomImg.crossOrigin = "anonymous";
     roomImg.onload = () => {
+      roomImageRef.current = roomImg;
+      setRoomImageReady(true);
       const c = document.createElement("canvas");
       c.width = width;
       c.height = height;
@@ -106,6 +117,9 @@ export default function TileOverlayCanvas({
       setEdgeMask(occlusionMaskToWallMask(buildOcclusionMask(imageData)));
     };
     roomImg.src = roomImageUrl;
+    return () => {
+      roomImageRef.current = null;
+    };
   }, [roomImageUrl, width, height]);
 
   useEffect(() => {
@@ -132,7 +146,7 @@ export default function TileOverlayCanvas({
       height: DEFAULT_WALL_HEIGHT_MM,
     };
 
-    const quadMask = createQuadMaskImageData(width, height, quad);
+    const quadMask = createFeatheredQuadMask(width, height, quad, FEATHER_PX);
     const smoothOpts = { closeRadius: 3, edgeBlurPx: 2 };
     let occlusionMask: ImageData | null = null;
     if (depthMap) {
@@ -179,12 +193,32 @@ export default function TileOverlayCanvas({
       ? combineMasks(width, height, quadMask, occlusionMask)
       : quadMask;
 
+    let lightingCanvas: HTMLCanvasElement | null = null;
+    if (roomImageRef.current && occlusionMask) {
+      lightingCanvas = extractLightingMap(
+        roomImageRef.current,
+        quad,
+        width,
+        height,
+        occlusionMask
+      );
+    }
+    const bbox = quadToBBox(quad);
+    const wallW = Math.max(1, bbox.width);
+    const wallH = Math.max(1, bbox.height);
+    if (lightingCanvas && (lightingCanvas.width !== wallW || lightingCanvas.height !== wallH)) {
+      lightingCanvas = null;
+    }
+
     const off = document.createElement("canvas");
     off.width = width;
     off.height = height;
     const offCtx = off.getContext("2d");
     if (offCtx) {
-      renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm);
+      renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm, {
+        lightingCanvas: lightingCanvas ?? undefined,
+        noiseOpacity: NOISE_OPACITY,
+      });
       ctx.drawImage(off, 0, 0);
       ctx.globalCompositeOperation = "destination-in";
       const maskCanvas = document.createElement("canvas");
@@ -197,9 +231,12 @@ export default function TileOverlayCanvas({
       }
       ctx.globalCompositeOperation = "source-over";
     } else {
-      renderTiledWall(ctx, quad, img, tileMm, wallSizeMm);
+      renderTiledWall(ctx, quad, img, tileMm, wallSizeMm, {
+        lightingCanvas: lightingCanvas ?? undefined,
+        noiseOpacity: NOISE_OPACITY,
+      });
     }
-  }, [corners, imageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask]);
+  }, [corners, imageReady, roomImageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask]);
 
   if (corners.length !== 4 || !tileImageUrl || !width || !height)
     return null;
