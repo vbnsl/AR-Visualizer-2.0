@@ -1,12 +1,19 @@
 /**
  * Lighting map from the room image for realistic tile shading.
- * Only uses pixels where wallMask indicates "wall" so TV/chair don't cast shadows.
+ *
+ * Used as a multiply layer on the tile so darker wall areas darken the tile. To avoid
+ * TV/chair casting shadows, we only sample room pixels where wallMask indicates "wall"
+ * (alpha >= WALL_THRESHOLD); non-wall pixels are replaced with the median wall brightness
+ * before blur, so the map has no dark object shapes.
+ *
+ * Pipeline: crop to quad bbox → grayscale → replace non-wall with wall median → blur → normalize → canvas.
  */
 
 import type { Quad } from "./tiledWall";
 import { quadToBBox } from "./tiledWall";
 
 const DEFAULT_BLUR_RADIUS_PX = 40;
+/** Mask alpha >= this treated as "wall"; below = foreground (TV, chair) — not used for lighting sample. */
 const WALL_THRESHOLD = 128;
 
 function gaussianKernel(radius: number): Float32Array {

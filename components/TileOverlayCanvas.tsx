@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * Tile overlay: draws a perspective-correct tiled wall on a 2D canvas over the room image.
+ *
+ * Pipeline:
+ * 1. Occlusion source (priority): depth map → DeepLab wall mask → edge-based mask. Result smoothed (smoothWallMask).
+ * 2. Combine feathered quad mask with occlusion mask (min alpha) so tile is clipped to quad and respects occlusion.
+ * 3. If we have occlusion, extract wall-only lighting from room (extractLightingMap) so TV/chair don't cast shadows.
+ * 4. Render tiled wall to offscreen (renderTiledWall with optional lighting + noise), then destination-in with combined mask.
+ */
+
 import { useRef, useEffect, useState } from "react";
 import { renderTiledWall, type Quad } from "@/lib/tiledWall";
 import {
@@ -148,6 +158,7 @@ export default function TileOverlayCanvas({
 
     const quadMask = createFeatheredQuadMask(width, height, quad, FEATHER_PX);
     const smoothOpts = { closeRadius: 3, edgeBlurPx: 2 };
+    // Occlusion source (priority): depth → DeepLab wall mask → edge-based; then smooth
     let occlusionMask: ImageData | null = null;
     if (depthMap) {
       const raw = buildWallMask(
@@ -189,10 +200,12 @@ export default function TileOverlayCanvas({
     }
     if (!occlusionMask) occlusionMask = edgeMask ? smoothWallMask(edgeMask, smoothOpts) : null;
 
+    // Combine feathered quad with occlusion so tile is clipped to quad and respects foreground
     const mask = occlusionMask
       ? combineMasks(width, height, quadMask, occlusionMask)
       : quadMask;
 
+    // Wall-only lighting (only when we have occlusion so TV/chair don't cast shadows)
     let lightingCanvas: HTMLCanvasElement | null = null;
     if (roomImageRef.current && occlusionMask) {
       lightingCanvas = extractLightingMap(
@@ -210,6 +223,7 @@ export default function TileOverlayCanvas({
       lightingCanvas = null;
     }
 
+    // Render tiled wall to offscreen then destination-in with combined mask
     const off = document.createElement("canvas");
     off.width = width;
     off.height = height;

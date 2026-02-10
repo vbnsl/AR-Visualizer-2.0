@@ -47,9 +47,9 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Occlusion strategy
 
-**Current:** The tile overlay is drawn on a 2D canvas over the full image, so tiles appear on top of everything (TV, furniture, etc.). There is no occlusion yet.
+**Current:** Occlusion is implemented. The tile is drawn only where the pipeline decides "wall"; foreground (TV, furniture) punches through and shows the room photo. Priority: depth map → DeepLab wall mask → edge-based mask. See `lib/occlusionMask.ts` and `components/TileOverlayCanvas.tsx`.
 
-**Planned approach (depth-based):** Use **monocular depth estimation** on the room photo to get a per-pixel depth map. The **manual quad** defines the wall: sample depth at the quad (e.g. median inside the quad or at the four corners) to get “wall depth.” Then draw the tile only where depth is close to that value; pixels with “closer” depth (TV, furniture) keep the original image, so they occlude the tiles. This fits the existing flow: the user already picks the wall; occlusion simply respects “things in front of this surface.”
+**Depth-based (in use):** Use **monocular depth estimation** on the room photo to get a per-pixel depth map. The **manual quad** defines the wall: sample depth at the quad (e.g. median inside the quad or at the four corners) to get “wall depth.” Then draw the tile only where depth is close to that value; pixels with “closer” depth (TV, furniture) keep the original image, so they occlude the tiles. This fits the existing flow: the user already picks the wall; occlusion simply respects “things in front of this surface.”
 
 **Alternatives for later:**
 
@@ -57,3 +57,20 @@ Open [http://localhost:3000](http://localhost:3000).
 - **Manual occlusion brush** — Let the user paint regions that are in front (e.g. over the TV). No model dependency; useful to refine edges after depth-based occlusion.
 - **Refinement** — Erode the depth mask slightly at boundaries, or use a small tolerance band around wall depth, to reduce jagged edges and thin false occluders.
 - **WebGL + depth texture** — If depth runs in a pipeline anyway, composite the tile in a fragment shader that samples depth and discards foreground pixels for better performance at high resolution.
+
+## Features & debugging
+
+Quick reference for finding and tuning behaviour when debugging.
+
+| Feature | Where it lives | How to turn off / tune |
+|--------|----------------|-------------------------|
+| **Edge feathering** | `lib/featherMask.ts` — `createFeatheredQuadMask(..., featherPx)` | In `TileOverlayCanvas.tsx`: change `FEATHER_PX` (default 5). Set to 0 for hard edge. |
+| **Micro noise** | `lib/tiledWall.ts` — `renderTiledWall(..., { noiseOpacity })` | In `TileOverlayCanvas.tsx`: set `NOISE_OPACITY` to 0 to disable. |
+| **Lighting map** | `lib/lightingMap.ts` — `extractLightingMap(roomImage, quad, ..., wallMask)` | Only used when occlusion is available. Disabled if no occlusion mask. |
+| **Occlusion (depth)** | `lib/occlusionMask.ts` — `buildWallMask(..., tolerancePercent, depthCloserIsHigher)` | In `TileOverlayCanvas.tsx`: depth tolerance is `0.15`. Toggle `depthCloserIsHigher` on the page if depth looks inverted. |
+| **Occlusion (DeepLab)** | `lib/wallSegmentation.ts`; mask as `wallMask` from `app/page.tsx` | Used when depth is not available. Register WebGL backend before load. |
+| **Occlusion (edge)** | `lib/occlusionMask.ts` — `buildOcclusionMask(imageData, dilationIterations)` then `occlusionMaskToWallMask` | Fallback when no depth/wall mask. Edge threshold `avg * 0.85`; `dilationIterations` default 6. |
+| **Mask smoothing** | `lib/occlusionMask.ts` — `smoothWallMask(mask, { closeRadius, edgeBlurPx })` | In `TileOverlayCanvas.tsx`: `smoothOpts = { closeRadius: 3, edgeBlurPx: 2 }`. |
+| **Tile render pipeline** | `lib/tiledWall.ts` — `renderTiledWall` | Order: pattern → lighting multiply → noise → warp. Options: `lightingCanvas`, `noiseOpacity`. |
+
+**Pipeline summary (TileOverlayCanvas):** (1) Occlusion source: depth → DeepLab → edge; smooth. (2) Combine feathered quad + occlusion (min alpha). (3) If occlusion exists, extract wall-only lighting. (4) Draw tiled wall to offscreen, then destination-in with combined mask.
