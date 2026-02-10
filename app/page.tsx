@@ -10,8 +10,33 @@ import { TILE_CATALOG, type TileProduct } from "@/lib/catalog";
 import { estimateDepth, type DepthResult } from "@/lib/depth";
 import { segmentWall } from "@/lib/wallSegmentation";
 
+/** Max size of the room view so it doesn't dominate the screen; image fits inside and keeps aspect ratio. */
+const MAX_VIEW_WIDTH = 960;
+const MAX_VIEW_HEIGHT = 640;
+
+function getDisplaySize(
+  naturalWidth: number,
+  naturalHeight: number
+): { width: number; height: number } {
+  if (naturalWidth <= 0 || naturalHeight <= 0)
+    return { width: MAX_VIEW_WIDTH, height: MAX_VIEW_HEIGHT };
+  const scale = Math.min(
+    MAX_VIEW_WIDTH / naturalWidth,
+    MAX_VIEW_HEIGHT / naturalHeight,
+    1
+  );
+  return {
+    width: Math.round(naturalWidth * scale),
+    height: Math.round(naturalHeight * scale),
+  };
+}
+
 export default function VisualizerPage() {
   const [roomImageUrl, setRoomImageUrl] = useState<string | null>(null);
+  const [roomImageSize, setRoomImageSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const [corners, setCorners] = useState<Point[]>([]);
   const [selectedTile, setSelectedTile] = useState<TileProduct | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -26,16 +51,30 @@ export default function VisualizerPage() {
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const compositeRef = useRef<HTMLDivElement>(null);
 
+  // Load room image dimensions so we can size the view without stretching
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const update = () =>
-      setContainerSize({ width: el.clientWidth, height: el.clientHeight });
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+    if (!roomImageUrl) {
+      setRoomImageSize(null);
+      return;
+    }
+    const img = new Image();
+    img.onload = () =>
+      setRoomImageSize({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => setRoomImageSize(null);
+    img.src = roomImageUrl;
   }, [roomImageUrl]);
+
+  // Display size: fit within max window, preserve aspect ratio, no upscale
+  const displaySize =
+    roomImageSize && roomImageSize.width > 0 && roomImageSize.height > 0
+      ? getDisplaySize(roomImageSize.width, roomImageSize.height)
+      : null;
+
+  // Keep containerSize in sync for ref-based logic (e.g. download); view uses displaySize when available
+  useEffect(() => {
+    if (!displaySize) return;
+    setContainerSize(displaySize);
+  }, [displaySize?.width, displaySize?.height]);
 
   const handleImageLoad = useCallback((url: string) => {
     setRoomImageUrl(url);
@@ -198,18 +237,25 @@ export default function VisualizerPage() {
           )}
         </aside>
 
-        <main className="relative min-w-0 flex-1">
+        <main className="relative flex min-w-0 flex-1 items-center justify-center overflow-auto p-4">
           {!roomImageUrl ? (
-            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-600 bg-slate-900/50">
+            <div className="flex h-full min-h-[320px] w-full max-w-[960px] items-center justify-center rounded-lg border border-dashed border-slate-600 bg-slate-900/50">
               <p className="text-slate-500">
                 Upload a room photo or use the sample room to start.
               </p>
             </div>
+          ) : !displaySize ? (
+            <div className="flex min-h-[320px] min-w-[480px] items-center justify-center rounded-lg border border-slate-700 bg-slate-900/80">
+              <p className="text-slate-400">Loading image…</p>
+            </div>
           ) : (
             <div
               ref={containerRef}
-              className="relative h-full w-full overflow-hidden rounded-lg"
-              style={{ minHeight: 300 }}
+              className="relative shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-xl"
+              style={{
+                width: displaySize.width,
+                height: displaySize.height,
+              }}
               onClick={handleCanvasClick}
               role="presentation"
             >
@@ -218,22 +264,22 @@ export default function VisualizerPage() {
                 className="absolute inset-0"
                 style={{
                   cursor: canPlaceCorners ? "crosshair" : "default",
-                  width: containerSize.width,
-                  height: containerSize.height,
+                  width: displaySize.width,
+                  height: displaySize.height,
                 }}
               >
                 <VisualizerCanvas
                   roomImageUrl={roomImageUrl}
-                  width={containerSize.width}
-                  height={containerSize.height}
+                  width={displaySize.width}
+                  height={displaySize.height}
                   containerRef={canvasContainerRef}
                 />
                 <TileOverlayCanvas
                   corners={corners}
                   tileImageUrl={selectedTile?.imageUrl ?? null}
                   tileSizeMm={selectedTile?.sizeMm}
-                  width={containerSize.width}
-                  height={containerSize.height}
+                  width={displaySize.width}
+                  height={displaySize.height}
                   depthMap={depthMap}
                   depthCloserIsHigher={depthCloserIsHigher}
                   wallMask={wallMask}
@@ -244,8 +290,8 @@ export default function VisualizerPage() {
                 <CornerHandles
                   corners={corners}
                   onMove={handleCornerMove}
-                  containerWidth={containerSize.width}
-                  containerHeight={containerSize.height}
+                  containerWidth={displaySize.width}
+                  containerHeight={displaySize.height}
                 />
               )}
             </div>
