@@ -3,6 +3,18 @@
 import Image from "next/image";
 import type { TileProduct } from "@/lib/catalog";
 
+/** Format tile size for display: "W×H cm". Uses default by surface when sizeMm is missing. */
+function formatTileSize(tile: TileProduct): string {
+  if (tile.sizeMm && tile.sizeMm.width > 0 && tile.sizeMm.height > 0) {
+    const w = Math.round(tile.sizeMm.width / 10);
+    const h = Math.round(tile.sizeMm.height / 10);
+    return `${w}×${h} cm`;
+  }
+  if (tile.surface === "floor") return "120×120 cm";
+  if (tile.surface === "wall") return "30×30 cm";
+  return "—";
+}
+
 interface TilePickerProps {
   tiles: TileProduct[];
   selectedId: string | null;
@@ -39,8 +51,11 @@ export default function TilePicker({
               sizes="120px"
               unoptimized
             />
-            <span className="absolute bottom-0 left-0 right-0 bg-black/60 py-1 text-center text-xs text-white">
-              {tile.name}
+            <span className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-1.5 text-center text-xs text-white">
+              <span className="block truncate font-medium">{tile.name}</span>
+              <span className="block text-[10px] text-slate-300">
+                {formatTileSize(tile)}
+              </span>
             </span>
           </button>
         ))}
