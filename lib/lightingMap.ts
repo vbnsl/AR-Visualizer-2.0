@@ -15,8 +15,8 @@ import { quadToBBox } from "./tiledWall";
 const DEFAULT_BLUR_RADIUS_PX = 40;
 /** Mask alpha >= this treated as "wall"; below = foreground (TV, chair) — not used for lighting sample. */
 const WALL_THRESHOLD = 128;
-/** Minimum value (0–255) in the lighting map so multiply never fully blacks out the tile; reduces harsh dark bands at edges. */
-const LIGHTING_FLOOR = 150;
+/** Minimum value (0–255) in the lighting map; lower allows deeper contact shadows. */
+const LIGHTING_FLOOR = 110;
 
 function gaussianKernel(radius: number): Float32Array {
   const size = radius * 2 + 1;
@@ -89,7 +89,7 @@ export function extractLightingMap(
     ? blurRadiusPxOrOptions
     : { blurRadiusPx: blurRadiusPxOrOptions };
   const blurRadiusPx = opts.blurRadiusPx ?? DEFAULT_BLUR_RADIUS_PX;
-  const preserveForegroundShadows = opts.preserveForegroundShadows ?? false;
+  const preserveForegroundShadows = opts.preserveForegroundShadows ?? true;
   const bbox = quadToBBox(quad);
   const w = Math.max(1, Math.floor(bbox.width));
   const h = Math.max(1, Math.floor(bbox.height));

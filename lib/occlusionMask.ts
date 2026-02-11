@@ -88,9 +88,9 @@ export function combineMasks(
 /**
  * Builds an occlusion mask from the room image: edges (Sobel) → threshold (avg * 0.85) → dilation → blur.
  * Returns ImageData with alpha 255 at edges/objects (punch through), 0 = wall. Use occlusionMaskToWallMask()
- * to get 255 = show tile for the overlay. dilationIterations controls how far edges expand (default 6).
+ * to get 255 = show tile for the overlay. dilationIterations controls how far edges expand (default 2 to preserve thin details).
  */
-export function buildOcclusionMask(imageData: ImageData, dilationIterations = 6): ImageData {
+export function buildOcclusionMask(imageData: ImageData, dilationIterations = 2): ImageData {
   const { width, height, data } = imageData;
   if (width <= 0 || height <= 0) return new ImageData(width, height);
 
@@ -247,23 +247,22 @@ export function smoothWallMask(
     }
   }
 
-  if (edgeBlurPx > 0) {
-    const next = new Uint8Array(width * height);
-    const r = edgeBlurPx;
-    const size = (2 * r + 1) ** 2;
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        let sum = 0;
-        for (let dy = -r; dy <= r; dy++) {
-          for (let dx = -r; dx <= r; dx++) {
-            sum += get(x + dx, y + dy);
-          }
+  // 3x3 median filter to snap edges to furniture and avoid blurry halo
+  const median3x3 = new Uint8Array(width * height);
+  const win: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      win.length = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          win.push(get(x + dx, y + dy));
         }
-        next[y * width + x] = Math.round(sum / size);
       }
+      win.sort((a, b) => a - b);
+      median3x3[y * width + x] = win[4];
     }
-    for (let i = 0; i < width * height; i++) alpha[i] = next[i];
   }
+  for (let i = 0; i < width * height; i++) alpha[i] = median3x3[i];
 
   const out = new ImageData(width, height);
   for (let i = 0; i < width * height; i++) {

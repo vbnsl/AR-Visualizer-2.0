@@ -44,7 +44,7 @@ const DEFAULT_WALL_HEIGHT_MM = 2400;
 /** Default tile size in mm (30cm x 30cm) when catalog has no sizeMm. */
 const DEFAULT_TILE_SIZE_MM = { width: 300, height: 300 };
 const FEATHER_PX = 5;
-const NOISE_OPACITY = 0.015;
+const NOISE_OPACITY = 0.02;
 /** For floor only: darken the "far" (top) part of the quad to suggest depth. 0 = off, ~0.2 = subtle. */
 const FLOOR_DEPTH_GRADIENT_STRENGTH = 0.2;
 /** For floor only: stronger lighting multiply so room falloff is more visible (1 = same as wall). */
@@ -245,8 +245,7 @@ export default function TileOverlayCanvas({
         quad,
         width,
         height,
-        occlusionMask,
-        { preserveForegroundShadows: surface === "floor" }
+        occlusionMask
       );
     }
     const bbox = quadToBBox(quad);
@@ -256,7 +255,8 @@ export default function TileOverlayCanvas({
       lightingCanvas = null;
     }
 
-    // Render tiled wall to offscreen then destination-in with combined mask
+    // Render tiled wall to offscreen then destination-in with combined mask.
+    // Lighting is applied with multiply in renderTiledWall so contact shadows anchor furniture on the tiles.
     const off = document.createElement("canvas");
     off.width = width;
     off.height = height;
@@ -266,7 +266,7 @@ export default function TileOverlayCanvas({
         lightingCanvas: lightingCanvas ?? undefined,
         lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
         noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
-        groutOpacity: 0.35,
+        groutOpacity: 0.3,
       });
       // Floor only: darken the "far" (top) part of the quad to suggest depth
       if (surface === "floor" && FLOOR_DEPTH_GRADIENT_STRENGTH > 0) {
@@ -350,7 +350,7 @@ export default function TileOverlayCanvas({
         lightingCanvas: lightingCanvas ?? undefined,
         lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
         noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
-        groutOpacity: 0.35,
+        groutOpacity: 0.3,
       });
     }
   }, [corners, imageReady, roomImageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask, surface]);

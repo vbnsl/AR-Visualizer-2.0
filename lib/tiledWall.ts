@@ -42,8 +42,8 @@ export function quadToBBox(quad: Quad): WallBBox {
   return { x, y, width, height };
 }
 
-/** Subdivisions for projective homography warp (tiles converge to vanishing point). */
-const HOMOGRAPHY_SUBDIV = 24;
+/** Subdivisions for projective homography warp (smoother perspective, tiles converge to vanishing point). */
+const HOMOGRAPHY_SUBDIV = 32;
 
 /**
  * Compute 3x3 homography H mapping source rect (0,0)-(srcW,srcH) to dest quad.
@@ -228,7 +228,7 @@ export function renderTiledWall(
   offCtx.restore();
 
   // --- Grout lines: thin dark lines at tile boundaries for perceived depth (bump effect) ---
-  const groutOpacity = options?.groutOpacity ?? 0;
+  const groutOpacity = options?.groutOpacity ?? 0.3;
   if (groutOpacity > 0 && tilesX > 0 && tilesY > 0) {
     const stepPxX = wallWidthPx / tilesX;
     const stepPxY = wallHeightPx / tilesY;
@@ -252,7 +252,7 @@ export function renderTiledWall(
     offCtx.restore();
   }
 
-  // --- Lighting: multiply by wall lighting map (only when provided; avoids TV/chair shadows if map is wall-only) ---
+  // --- Lighting: multiply by lighting map so contact shadows anchor furniture on the tiles ---
   const lightingCanvas = options?.lightingCanvas;
   const lightingStrength = Math.max(1, options?.lightingStrength ?? 1);
   if (lightingCanvas && lightingCanvas.width === wallWidthPx && lightingCanvas.height === wallHeightPx) {
@@ -268,8 +268,8 @@ export function renderTiledWall(
     offCtx.globalCompositeOperation = "source-over";
   }
 
-  // --- Micro noise: overlay subtle random gray to break visible repetition ---
-  const noiseOpacity = options?.noiseOpacity ?? 0;
+  // --- Micro noise: overlay subtle random gray so tiles look like physical objects ---
+  const noiseOpacity = options?.noiseOpacity ?? 0.02;
   if (noiseOpacity > 0) {
     const noise = document.createElement("canvas");
     noise.width = wallWidthPx;
