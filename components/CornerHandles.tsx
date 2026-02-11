@@ -7,20 +7,30 @@ export interface Point {
   y: number;
 }
 
+type HandleVariant = "wall" | "floor";
+
 interface CornerHandlesProps {
   corners: Point[];
   onMove: (index: number, x: number, y: number) => void;
   containerWidth: number;
   containerHeight: number;
+  /** Wall = blue handles, floor = green handles. */
+  variant?: HandleVariant;
 }
 
 const HANDLE_SIZE = 24;
+
+const VARIANT_CLASSES: Record<HandleVariant, string> = {
+  wall: "border-white bg-blue-500",
+  floor: "border-white bg-green-500",
+};
 
 export default function CornerHandles({
   corners,
   onMove,
   containerWidth,
   containerHeight,
+  variant = "wall",
 }: CornerHandlesProps) {
   const [dragging, setDragging] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -70,7 +80,7 @@ export default function CornerHandles({
       {corners.map((p, i) => (
         <div
           key={i}
-          className="pointer-events-auto absolute cursor-grab rounded-full border-2 border-white bg-blue-500 shadow-lg active:cursor-grabbing"
+          className={`pointer-events-auto absolute cursor-grab rounded-full border-2 shadow-lg active:cursor-grabbing ${VARIANT_CLASSES[variant]}`}
           style={{
             width: HANDLE_SIZE,
             height: HANDLE_SIZE,
