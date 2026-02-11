@@ -16,6 +16,9 @@ type ViewMode = "wall" | "floor";
 const MAX_VIEW_WIDTH = 960;
 const MAX_VIEW_HEIGHT = 640;
 
+/** Default floor tile size in mm when catalog has no sizeMm (120 cm × 120 cm; use 600×1200 for 60×120 cm). */
+const FLOOR_DEFAULT_TILE_MM = { width: 1200, height: 1200 };
+
 function getDisplaySize(
   naturalWidth: number,
   naturalHeight: number
@@ -168,6 +171,59 @@ export default function VisualizerPage() {
     else setFloorCorners([]);
   }, [viewMode]);
 
+  /** Snap to a rectangle from averaged corners (can leave gaps at edges). */
+  const handleStraightenCorners = useCallback(() => {
+    if (corners.length !== 4) return;
+    const [p0, p1, p2, p3] = corners;
+    const topY = (p0.y + p1.y) / 2;
+    const bottomY = (p2.y + p3.y) / 2;
+    const leftX = (p0.x + p3.x) / 2;
+    const rightX = (p1.x + p2.x) / 2;
+    const straight: Point[] = [
+      { x: leftX, y: topY },
+      { x: rightX, y: topY },
+      { x: rightX, y: bottomY },
+      { x: leftX, y: bottomY },
+    ];
+    if (viewMode === "wall") setWallCorners(straight);
+    else setFloorCorners(straight);
+  }, [viewMode, corners]);
+
+  /** Snap to the bounding box of the quad so edges are straight with no gaps. */
+  const handleStraightenToFit = useCallback(() => {
+    if (corners.length !== 4) return;
+    const xs = corners.map((p) => p.x);
+    const ys = corners.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const straight: Point[] = [
+      { x: minX, y: minY },
+      { x: maxX, y: minY },
+      { x: maxX, y: maxY },
+      { x: minX, y: maxY },
+    ];
+    if (viewMode === "wall") setWallCorners(straight);
+    else setFloorCorners(straight);
+  }, [viewMode, corners]);
+
+  /** Make only top and bottom edges horizontal; left/right stay as placed (reduces slant, keeps fit). */
+  const handleStraightenHorizontal = useCallback(() => {
+    if (corners.length !== 4) return;
+    const [p0, p1, p2, p3] = corners;
+    const topY = (p0.y + p1.y) / 2;
+    const bottomY = (p2.y + p3.y) / 2;
+    const straight: Point[] = [
+      { x: p0.x, y: topY },
+      { x: p1.x, y: topY },
+      { x: p2.x, y: bottomY },
+      { x: p3.x, y: bottomY },
+    ];
+    if (viewMode === "wall") setWallCorners(straight);
+    else setFloorCorners(straight);
+  }, [viewMode, corners]);
+
   const handleDownload = useCallback(() => {
     const container = compositeRef.current;
     const canvases = container?.querySelectorAll("canvas");
@@ -292,13 +348,43 @@ export default function VisualizerPage() {
                     : "Drag the blue handles to adjust corners."}
                 </p>
                 {corners.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleResetCorners}
-                    className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
-                  >
-                    Reset corners
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetCorners}
+                      className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+                    >
+                      Reset corners
+                    </button>
+                    {corners.length === 4 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleStraightenToFit}
+                          className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+                          title="Snap to a rectangle that fills the current area (no gaps at edges)"
+                        >
+                          Straighten to fit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleStraightenHorizontal}
+                          className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+                          title="Make top and bottom horizontal only; left/right stay as placed"
+                        >
+                          Straighten horizontal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleStraightenCorners}
+                          className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+                          title="Snap to rectangle from corner average (may leave gaps)"
+                        >
+                          Straighten
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -392,7 +478,7 @@ export default function VisualizerPage() {
                   <TileOverlayCanvas
                     corners={floorCorners}
                     tileImageUrl={selectedFloorTile?.imageUrl ?? null}
-                    tileSizeMm={selectedFloorTile?.sizeMm}
+                    tileSizeMm={selectedFloorTile?.sizeMm ?? FLOOR_DEFAULT_TILE_MM}
                     width={displaySize.width}
                     height={displaySize.height}
                     depthMap={depthMap}

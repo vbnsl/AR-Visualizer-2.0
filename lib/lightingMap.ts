@@ -15,6 +15,8 @@ import { quadToBBox } from "./tiledWall";
 const DEFAULT_BLUR_RADIUS_PX = 40;
 /** Mask alpha >= this treated as "wall"; below = foreground (TV, chair) — not used for lighting sample. */
 const WALL_THRESHOLD = 128;
+/** Minimum value (0–255) in the lighting map so multiply never fully blacks out the tile; reduces harsh dark bands at edges. */
+const LIGHTING_FLOOR = 150;
 
 function gaussianKernel(radius: number): Float32Array {
   const size = radius * 2 + 1;
@@ -136,7 +138,8 @@ export function extractLightingMap(
     maxV = Math.max(maxV, gray[i]);
   }
   const range = maxV - minV || 1;
-
+  // Remap from [0,255] to [LIGHTING_FLOOR,255] so multiply never creates black bands at edges
+  const scale = (255 - LIGHTING_FLOOR) / 255;
   const out = document.createElement("canvas");
   out.width = w;
   out.height = h;
@@ -146,7 +149,8 @@ export function extractLightingMap(
   for (let py = 0; py < h; py++) {
     for (let px = 0; px < w; px++) {
       const srcIdx = py < cropH && px < cropW ? py * cropW + px : 0;
-      const v = Math.round(255 * (gray[srcIdx] - minV) / range);
+      const n = range > 0 ? (gray[srcIdx] - minV) / range : 1;
+      const v = Math.round(LIGHTING_FLOOR + scale * 255 * n);
       const clamped = Math.max(0, Math.min(255, v));
       const i = (py * w + px) * 4;
       outData.data[i] = clamped;
