@@ -16,8 +16,8 @@ type ViewMode = "wall" | "floor";
 const MAX_VIEW_WIDTH = 960;
 const MAX_VIEW_HEIGHT = 640;
 
-/** Default floor tile size in mm when catalog has no sizeMm (120 cm × 120 cm; use 600×1200 for 60×120 cm). */
-const FLOOR_DEFAULT_TILE_MM = { width: 1200, height: 1200 };
+/** Default floor tile size in mm when catalog has no sizeMm (60 cm × 60 cm). */
+const FLOOR_DEFAULT_TILE_MM = { width: 600, height: 600 };
 
 function getDisplaySize(
   naturalWidth: number,
@@ -485,6 +485,7 @@ export default function VisualizerPage() {
                     depthCloserIsHigher={depthCloserIsHigher}
                     wallMask={floorMask}
                     roomImageUrl={roomImageUrl}
+                    surface="floor"
                   />
                 )}
               </div>

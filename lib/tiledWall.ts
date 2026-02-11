@@ -98,6 +98,8 @@ function drawQuadWarp(
 export interface RenderTiledWallOptions {
   /** Lighting map canvas (size = wall bbox). Applied with multiply blend so tile follows room lighting. */
   lightingCanvas?: HTMLCanvasElement | null;
+  /** Strength of lighting multiply (default 1). Values > 1 apply a second multiply pass for stronger falloff (e.g. floor). */
+  lightingStrength?: number;
   /** Monochrome noise opacity 0–1 (e.g. 0.015 = 1.5%) to break tile repetition; 0 = off. */
   noiseOpacity?: number;
 }
@@ -166,9 +168,17 @@ export function renderTiledWall(
 
   // --- Lighting: multiply by wall lighting map (only when provided; avoids TV/chair shadows if map is wall-only) ---
   const lightingCanvas = options?.lightingCanvas;
+  const lightingStrength = Math.max(1, options?.lightingStrength ?? 1);
   if (lightingCanvas && lightingCanvas.width === wallWidthPx && lightingCanvas.height === wallHeightPx) {
     offCtx.globalCompositeOperation = "multiply";
     offCtx.drawImage(lightingCanvas, 0, 0, wallWidthPx, wallHeightPx);
+    // Optional second multiply pass for stronger falloff (e.g. floor receding into room)
+    if (lightingStrength > 1) {
+      const extra = Math.min(1, lightingStrength - 1);
+      offCtx.globalAlpha = extra;
+      offCtx.drawImage(lightingCanvas, 0, 0, wallWidthPx, wallHeightPx);
+      offCtx.globalAlpha = 1;
+    }
     offCtx.globalCompositeOperation = "source-over";
   }
 

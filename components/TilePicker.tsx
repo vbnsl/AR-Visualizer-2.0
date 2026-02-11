@@ -10,7 +10,7 @@ function formatTileSize(tile: TileProduct): string {
     const h = Math.round(tile.sizeMm.height / 10);
     return `${w}×${h} cm`;
   }
-  if (tile.surface === "floor") return "120×120 cm";
+  if (tile.surface === "floor") return "60×60 cm";
   if (tile.surface === "wall") return "30×30 cm";
   return "—";
 }

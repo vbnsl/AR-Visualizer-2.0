@@ -44,6 +44,18 @@ const DEFAULT_WALL_HEIGHT_MM = 2400;
 const DEFAULT_TILE_SIZE_MM = { width: 300, height: 300 };
 const FEATHER_PX = 5;
 const NOISE_OPACITY = 0.015;
+/** For floor only: darken the "far" (top) part of the quad to suggest depth. 0 = off, ~0.2 = subtle. */
+const FLOOR_DEPTH_GRADIENT_STRENGTH = 0.2;
+/** For floor only: stronger lighting multiply so room falloff is more visible (1 = same as wall). */
+const FLOOR_LIGHTING_STRENGTH = 1.2;
+/** For floor only: subtle desaturation toward far (top) edge for atmospheric depth. 0 = off, ~0.12 = subtle. */
+const FLOOR_ATMOSPHERIC_STRENGTH = 0.12;
+/** For floor only: subtle darkening toward quad edges (vignette) so floor feels inset. 0 = off, ~0.08 = subtle. */
+const FLOOR_EDGE_VIGNETTE = 0.08;
+/** For floor only: extra feather at quad edges for softer blend with room (wall uses FEATHER_PX). */
+const FLOOR_FEATHER_PX = 8;
+/** For floor only: slightly higher micro-noise to break repetition (wall uses NOISE_OPACITY). */
+const FLOOR_NOISE_OPACITY = 0.02;
 
 interface TileOverlayCanvasProps {
   corners: Point[];
@@ -60,6 +72,8 @@ interface TileOverlayCanvasProps {
   wallMask?: ImageData | null;
   /** Room image URL for edge-based occlusion when depth and wall mask unavailable. */
   roomImageUrl?: string | null;
+  /** "floor" applies an extra depth gradient (darker toward far edge). Default "wall". */
+  surface?: "wall" | "floor";
 }
 
 /**
@@ -76,6 +90,7 @@ export default function TileOverlayCanvas({
   depthCloserIsHigher = true,
   wallMask,
   roomImageUrl,
+  surface = "wall",
 }: TileOverlayCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -156,7 +171,8 @@ export default function TileOverlayCanvas({
       height: DEFAULT_WALL_HEIGHT_MM,
     };
 
-    const quadMask = createFeatheredQuadMask(width, height, quad, FEATHER_PX);
+    const featherPx = surface === "floor" ? FLOOR_FEATHER_PX : FEATHER_PX;
+    const quadMask = createFeatheredQuadMask(width, height, quad, featherPx);
     const smoothOpts = { closeRadius: 3, edgeBlurPx: 2 };
     // Occlusion source (priority): depth → DeepLab wall mask → edge-based; then smooth
     let occlusionMask: ImageData | null = null;
@@ -231,8 +247,75 @@ export default function TileOverlayCanvas({
     if (offCtx) {
       renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm, {
         lightingCanvas: lightingCanvas ?? undefined,
-        noiseOpacity: NOISE_OPACITY,
+        lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
+        noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
       });
+      // Floor only: darken the "far" (top) part of the quad to suggest depth
+      if (surface === "floor" && FLOOR_DEPTH_GRADIENT_STRENGTH > 0) {
+        const bbox = quadToBBox(quad);
+        const [p0, p1, p2, p3] = quad;
+        offCtx.save();
+        offCtx.beginPath();
+        offCtx.moveTo(p0.x, p0.y);
+        offCtx.lineTo(p1.x, p1.y);
+        offCtx.lineTo(p2.x, p2.y);
+        offCtx.lineTo(p3.x, p3.y);
+        offCtx.closePath();
+        offCtx.clip();
+        const dark = Math.round(255 * (1 - FLOOR_DEPTH_GRADIENT_STRENGTH));
+        const grad = offCtx.createLinearGradient(bbox.x, bbox.y, bbox.x, bbox.y + bbox.height);
+        grad.addColorStop(0, `rgb(${dark},${dark},${dark})`);
+        grad.addColorStop(1, "rgb(255,255,255)");
+        offCtx.globalCompositeOperation = "multiply";
+        offCtx.fillStyle = grad;
+        offCtx.fillRect(bbox.x, bbox.y, bbox.width, bbox.height);
+        offCtx.restore();
+      }
+      // Floor only: subtle desaturation toward far (top) edge (atmospheric perspective)
+      if (surface === "floor" && FLOOR_ATMOSPHERIC_STRENGTH > 0) {
+        const bbox = quadToBBox(quad);
+        const [p0, p1, p2, p3] = quad;
+        offCtx.save();
+        offCtx.beginPath();
+        offCtx.moveTo(p0.x, p0.y);
+        offCtx.lineTo(p1.x, p1.y);
+        offCtx.lineTo(p2.x, p2.y);
+        offCtx.lineTo(p3.x, p3.y);
+        offCtx.closePath();
+        offCtx.clip();
+        const grayAlpha = Math.min(1, FLOOR_ATMOSPHERIC_STRENGTH);
+        const atmos = offCtx.createLinearGradient(bbox.x, bbox.y, bbox.x, bbox.y + bbox.height);
+        atmos.addColorStop(0, `rgba(128,128,128,${grayAlpha})`);
+        atmos.addColorStop(1, "rgba(128,128,128,0)");
+        offCtx.globalCompositeOperation = "color";
+        offCtx.fillStyle = atmos;
+        offCtx.fillRect(bbox.x, bbox.y, bbox.width, bbox.height);
+        offCtx.restore();
+      }
+      // Floor only: subtle edge vignette (darker toward quad edges)
+      if (surface === "floor" && FLOOR_EDGE_VIGNETTE > 0) {
+        const bbox = quadToBBox(quad);
+        const [p0, p1, p2, p3] = quad;
+        offCtx.save();
+        offCtx.beginPath();
+        offCtx.moveTo(p0.x, p0.y);
+        offCtx.lineTo(p1.x, p1.y);
+        offCtx.lineTo(p2.x, p2.y);
+        offCtx.lineTo(p3.x, p3.y);
+        offCtx.closePath();
+        offCtx.clip();
+        const cx = bbox.x + bbox.width / 2;
+        const cy = bbox.y + bbox.height / 2;
+        const r = Math.max(bbox.width, bbox.height) / 2;
+        const dark = Math.round(255 * (1 - FLOOR_EDGE_VIGNETTE));
+        const vig = offCtx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        vig.addColorStop(0, "rgb(255,255,255)");
+        vig.addColorStop(1, `rgb(${dark},${dark},${dark})`);
+        offCtx.globalCompositeOperation = "multiply";
+        offCtx.fillStyle = vig;
+        offCtx.fillRect(bbox.x, bbox.y, bbox.width, bbox.height);
+        offCtx.restore();
+      }
       ctx.drawImage(off, 0, 0);
       ctx.globalCompositeOperation = "destination-in";
       const maskCanvas = document.createElement("canvas");
@@ -247,10 +330,11 @@ export default function TileOverlayCanvas({
     } else {
       renderTiledWall(ctx, quad, img, tileMm, wallSizeMm, {
         lightingCanvas: lightingCanvas ?? undefined,
-        noiseOpacity: NOISE_OPACITY,
+        lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
+        noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
       });
     }
-  }, [corners, imageReady, roomImageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask]);
+  }, [corners, imageReady, roomImageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask, surface]);
 
   if (corners.length !== 4 || !tileImageUrl || !width || !height)
     return null;
