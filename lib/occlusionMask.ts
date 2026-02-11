@@ -214,7 +214,7 @@ export function smoothWallMask(
 ): ImageData {
   const { width, height, data } = mask;
   const closeRadius = Math.max(0, Math.min(5, options?.closeRadius ?? 3));
-  const edgeBlurPx = Math.max(0, Math.min(4, options?.edgeBlurPx ?? 2));
+  const edgeBlurPx = Math.max(0, Math.min(8, options?.edgeBlurPx ?? 2));
 
   const alpha = new Uint8Array(width * height);
   for (let i = 0; i < width * height; i++) alpha[i] = data[i * 4 + 3];
@@ -272,6 +272,65 @@ export function smoothWallMask(
     out.data[j + 1] = 255;
     out.data[j + 2] = 255;
     out.data[j + 3] = alpha[i];
+  }
+  return out;
+}
+
+/**
+ * Guided filter on the mask alpha: smooths the mask while preserving edges of the guide image.
+ * Reduces halo around foreground objects by aligning mask edges to guide (e.g. room luminance).
+ */
+export function guidedFilterMask(
+  mask: ImageData,
+  guide: ImageData,
+  radius: number = 4,
+  eps: number = 0.01
+): ImageData {
+  const { width, height, data: maskData } = mask;
+  const guideData = guide.data;
+  if (guide.width !== width || guide.height !== height) return mask;
+
+  const p = new Float32Array(width * height);
+  const I = new Float32Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    p[i] = maskData[i * 4 + 3];
+    I[i] = 0.299 * guideData[i * 4] + 0.587 * guideData[i * 4 + 1] + 0.114 * guideData[i * 4 + 2];
+  }
+
+  const getP = (x: number, y: number) => p[Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))];
+  const getI = (x: number, y: number) => I[Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))];
+
+  const r = Math.max(1, Math.min(20, radius));
+  const size = (2 * r + 1) ** 2;
+  const out = new ImageData(width, height);
+  const outAlpha = out.data;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sumI = 0, sumP = 0, sumII = 0, sumIP = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const iVal = getI(x + dx, y + dy);
+          const pVal = getP(x + dx, y + dy);
+          sumI += iVal;
+          sumP += pVal;
+          sumII += iVal * iVal;
+          sumIP += iVal * pVal;
+        }
+      }
+      const meanI = sumI / size;
+      const meanP = sumP / size;
+      const varI = sumII / size - meanI * meanI;
+      const covIP = sumIP / size - meanI * meanP;
+      const a = covIP / (varI + eps);
+      const b = meanP - a * meanI;
+      const idx = (y * width + x) * 4;
+      const q = Math.round(Math.max(0, Math.min(255, a * getI(x, y) + b)));
+      outAlpha[idx] = 255;
+      outAlpha[idx + 1] = 255;
+      outAlpha[idx + 2] = 255;
+      outAlpha[idx + 3] = q;
+    }
   }
   return out;
 }

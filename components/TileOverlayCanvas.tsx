@@ -18,6 +18,7 @@ import {
   occlusionMaskToWallMask,
   combineMasks,
   smoothWallMask,
+  guidedFilterMask,
 } from "@/lib/occlusionMask";
 import { createFeatheredQuadMask } from "@/lib/featherMask";
 import { extractLightingMap } from "@/lib/lightingMap";
@@ -173,8 +174,9 @@ export default function TileOverlayCanvas({
 
     const featherPx = surface === "floor" ? FLOOR_FEATHER_PX : FEATHER_PX;
     const quadMask = createFeatheredQuadMask(width, height, quad, featherPx);
-    const smoothOpts = { closeRadius: 3, edgeBlurPx: 2 };
-    // Occlusion source (priority): depth → DeepLab wall mask → edge-based; then smooth
+    const smoothOptsDefault = { closeRadius: 3, edgeBlurPx: 2 };
+    const smoothOptsEdge = { closeRadius: 3, edgeBlurPx: 5 };
+    // Occlusion source (priority): depth → DeepLab wall mask → edge-based; then smooth (guided filter for edge to reduce halo)
     let occlusionMask: ImageData | null = null;
     if (depthMap) {
       const raw = buildWallMask(
@@ -187,7 +189,7 @@ export default function TileOverlayCanvas({
         0.15,
         depthCloserIsHigher
       );
-      occlusionMask = smoothWallMask(raw, smoothOpts);
+      occlusionMask = smoothWallMask(raw, smoothOptsDefault);
     } else if (wallMask) {
       let raw: ImageData | null = null;
       if (wallMask.width === width && wallMask.height === height) {
@@ -212,9 +214,23 @@ export default function TileOverlayCanvas({
           raw = sctx.getImageData(0, 0, width, height);
         }
       }
-      if (raw) occlusionMask = smoothWallMask(raw, smoothOpts);
+      if (raw) occlusionMask = smoothWallMask(raw, smoothOptsDefault);
     }
-    if (!occlusionMask) occlusionMask = edgeMask ? smoothWallMask(edgeMask, smoothOpts) : null;
+    if (!occlusionMask && edgeMask) {
+      let toSmooth = edgeMask;
+      if (roomImageRef.current) {
+        const roomCanvas = document.createElement("canvas");
+        roomCanvas.width = width;
+        roomCanvas.height = height;
+        const rctx = roomCanvas.getContext("2d");
+        if (rctx) {
+          rctx.drawImage(roomImageRef.current, 0, 0, width, height);
+          const guideData = rctx.getImageData(0, 0, width, height);
+          toSmooth = guidedFilterMask(edgeMask, guideData, 4, 0.01);
+        }
+      }
+      occlusionMask = smoothWallMask(toSmooth, smoothOptsEdge);
+    }
 
     // Combine feathered quad with occlusion so tile is clipped to quad and respects foreground
     const mask = occlusionMask
@@ -229,7 +245,8 @@ export default function TileOverlayCanvas({
         quad,
         width,
         height,
-        occlusionMask
+        occlusionMask,
+        { preserveForegroundShadows: surface === "floor" }
       );
     }
     const bbox = quadToBBox(quad);
@@ -249,6 +266,7 @@ export default function TileOverlayCanvas({
         lightingCanvas: lightingCanvas ?? undefined,
         lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
         noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
+        groutOpacity: 0.35,
       });
       // Floor only: darken the "far" (top) part of the quad to suggest depth
       if (surface === "floor" && FLOOR_DEPTH_GRADIENT_STRENGTH > 0) {
@@ -332,6 +350,7 @@ export default function TileOverlayCanvas({
         lightingCanvas: lightingCanvas ?? undefined,
         lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
         noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
+        groutOpacity: 0.35,
       });
     }
   }, [corners, imageReady, roomImageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask, surface]);

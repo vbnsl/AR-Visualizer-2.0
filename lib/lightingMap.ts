@@ -67,6 +67,12 @@ function blurChannel(
   }
 }
 
+export interface ExtractLightingMapOptions {
+  blurRadiusPx?: number;
+  /** When true, keep foreground (non-wall) luminance so furniture casts contact shadows onto the tile. */
+  preserveForegroundShadows?: boolean;
+}
+
 /**
  * Extracts a lighting map from the room image using only wall pixels (from wallMask).
  * Returns a canvas of size (bbox.width × bbox.height) for use as multiply layer, or null if no wall mask.
@@ -77,8 +83,13 @@ export function extractLightingMap(
   fullWidth: number,
   fullHeight: number,
   wallMask: ImageData,
-  blurRadiusPx: number = DEFAULT_BLUR_RADIUS_PX
+  blurRadiusPxOrOptions: number | ExtractLightingMapOptions = DEFAULT_BLUR_RADIUS_PX
 ): HTMLCanvasElement | null {
+  const opts = typeof blurRadiusPxOrOptions === "object"
+    ? blurRadiusPxOrOptions
+    : { blurRadiusPx: blurRadiusPxOrOptions };
+  const blurRadiusPx = opts.blurRadiusPx ?? DEFAULT_BLUR_RADIUS_PX;
+  const preserveForegroundShadows = opts.preserveForegroundShadows ?? false;
   const bbox = quadToBBox(quad);
   const w = Math.max(1, Math.floor(bbox.width));
   const h = Math.max(1, Math.floor(bbox.height));
@@ -115,15 +126,16 @@ export function extractLightingMap(
 
   if (wallValues.length === 0) return null;
 
-  wallValues.sort((a, b) => a - b);
-  const median = wallValues[Math.floor(wallValues.length * 0.5)];
-
-  for (let py = 0; py < cropH; py++) {
-    for (let px = 0; px < cropW; px++) {
-      const mx = bx + px;
-      const my = by + py;
-      if (maskData[(my * fullWidth + mx) * 4 + 3] < WALL_THRESHOLD) {
-        gray[py * cropW + px] = median;
+  if (!preserveForegroundShadows) {
+    wallValues.sort((a, b) => a - b);
+    const median = wallValues[Math.floor(wallValues.length * 0.5)];
+    for (let py = 0; py < cropH; py++) {
+      for (let px = 0; px < cropW; px++) {
+        const mx = bx + px;
+        const my = by + py;
+        if (maskData[(my * fullWidth + mx) * 4 + 3] < WALL_THRESHOLD) {
+          gray[py * cropW + px] = median;
+        }
       }
     }
   }

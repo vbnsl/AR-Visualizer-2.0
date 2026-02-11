@@ -42,9 +42,95 @@ export function quadToBBox(quad: Quad): WallBBox {
   return { x, y, width, height };
 }
 
+/** Subdivisions for projective homography warp (tiles converge to vanishing point). */
+const HOMOGRAPHY_SUBDIV = 24;
+
 /**
- * Draw a source rectangle (image or canvas) onto ctx warped to the destination quad.
- * Uses two triangles with affine mapping for perspective-like warp.
+ * Compute 3x3 homography H mapping source rect (0,0)-(srcW,srcH) to dest quad.
+ * (x,y,w)' = H*(s,t,1)', screen = (x/w, y/w). Returns H as 3x3 row-major [0..8].
+ */
+function homographyFromQuad(
+  destQuad: Quad,
+  srcW: number,
+  srcH: number
+): number[] {
+  const [p0, p1, p2, p3] = destQuad;
+  const src = [[0, 0], [srcW, 0], [srcW, srcH], [0, srcH]];
+  const dst = [[p0.x, p0.y], [p1.x, p1.y], [p2.x, p2.y], [p3.x, p3.y]];
+  const A: number[] = [];
+  const b: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const s = src[i][0], t = src[i][1], x = dst[i][0], y = dst[i][1];
+    A.push(-s, -t, -1, 0, 0, 0, x * s, x * t); b.push(-x);
+    A.push(0, 0, 0, -s, -t, -1, y * s, y * t); b.push(-y);
+  }
+  const n = 8;
+  const M = Array(n * (n + 1));
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) M[r * (n + 1) + c] = A[r * n + c];
+    M[r * (n + 1) + n] = b[r];
+  }
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++)
+      if (Math.abs(M[r * (n + 1) + col]) > Math.abs(M[pivot * (n + 1) + col])) pivot = r;
+    for (let c = 0; c <= n; c++) {
+      const t = M[col * (n + 1) + c]; M[col * (n + 1) + c] = M[pivot * (n + 1) + c]; M[pivot * (n + 1) + c] = t;
+    }
+    const div = M[col * (n + 1) + col];
+    if (Math.abs(div) < 1e-12) continue;
+    for (let c = 0; c <= n; c++) M[col * (n + 1) + c] /= div;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r * (n + 1) + col];
+      for (let c = 0; c <= n; c++) M[r * (n + 1) + c] -= f * M[col * (n + 1) + c];
+    }
+  }
+  return [
+    M[0 * (n + 1) + n], M[1 * (n + 1) + n], M[2 * (n + 1) + n],
+    M[3 * (n + 1) + n], M[4 * (n + 1) + n], M[5 * (n + 1) + n],
+    M[6 * (n + 1) + n], M[7 * (n + 1) + n], 1
+  ];
+}
+
+function homographyMap(H: number[], s: number, t: number): { x: number; y: number } {
+  const w = H[6] * s + H[7] * t + H[8];
+  if (Math.abs(w) < 1e-9) return { x: 0, y: 0 };
+  return {
+    x: (H[0] * s + H[1] * t + H[2]) / w,
+    y: (H[3] * s + H[4] * t + H[5]) / w,
+  };
+}
+
+function drawTriangleWarp(
+  ctx: CanvasRenderingContext2D,
+  source: HTMLCanvasElement | HTMLImageElement,
+  sourceWidth: number,
+  sourceHeight: number,
+  dx0: number, dy0: number, dx1: number, dy1: number, dx2: number, dy2: number,
+  sx0: number, sy0: number, sx1: number, sy1: number, sx2: number, sy2: number
+): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(dx0, dy0); ctx.lineTo(dx1, dy1); ctx.lineTo(dx2, dy2);
+  ctx.closePath();
+  ctx.clip();
+  const denom = (sx1 - sx0) * (sy2 - sy0) - (sy1 - sy0) * (sx2 - sx0);
+  if (Math.abs(denom) < 1e-10) { ctx.restore(); return; }
+  const a = ((dx1 - dx0) * (sy2 - sy0) - (dx2 - dx0) * (sy1 - sy0)) / denom;
+  const b = ((dx2 - dx0) * (sx1 - sx0) - (dx1 - dx0) * (sx2 - sx0)) / denom;
+  const c = ((dy1 - dy0) * (sy2 - sy0) - (dy2 - dy0) * (sy1 - sy0)) / denom;
+  const d = ((dy2 - dy0) * (sx1 - sx0) - (dy1 - dy0) * (sx2 - sx0)) / denom;
+  const e = dx0 - a * sx0 - b * sy0;
+  const f = dy0 - c * sx0 - d * sy0;
+  ctx.setTransform(a, c, b, d, e, f);
+  ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+  ctx.restore();
+}
+
+/**
+ * Draw source rectangle onto ctx warped to the destination quad using projective homography.
+ * Subdivides into a grid so tiles converge to a vanishing point.
  */
 function drawQuadWarp(
   ctx: CanvasRenderingContext2D,
@@ -53,45 +139,18 @@ function drawQuadWarp(
   sourceWidth: number,
   sourceHeight: number
 ): void {
-  const [p0, p1, p2, p3] = destQuad;
-  const drawTriangle = (
-    dx0: number,
-    dy0: number,
-    dx1: number,
-    dy1: number,
-    dx2: number,
-    dy2: number,
-    sx0: number,
-    sy0: number,
-    sx1: number,
-    sy1: number,
-    sx2: number,
-    sy2: number
-  ) => {
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(dx0, dy0);
-    ctx.lineTo(dx1, dy1);
-    ctx.lineTo(dx2, dy2);
-    ctx.closePath();
-    ctx.clip();
-    const denom = (sx1 - sx0) * (sy2 - sy0) - (sy1 - sy0) * (sx2 - sx0);
-    if (Math.abs(denom) < 1e-10) {
-      ctx.restore();
-      return;
+  const H = homographyFromQuad(destQuad, sourceWidth, sourceHeight);
+  const n = HOMOGRAPHY_SUBDIV;
+  const stepX = sourceWidth / n;
+  const stepY = sourceHeight / n;
+  for (let iy = 0; iy < n; iy++) {
+    for (let ix = 0; ix < n; ix++) {
+      const s0 = ix * stepX, t0 = iy * stepY, s1 = (ix + 1) * stepX, t1 = (iy + 1) * stepY;
+      const d00 = homographyMap(H, s0, t0), d10 = homographyMap(H, s1, t0), d11 = homographyMap(H, s1, t1), d01 = homographyMap(H, s0, t1);
+      drawTriangleWarp(ctx, source, sourceWidth, sourceHeight, d00.x, d00.y, d10.x, d10.y, d11.x, d11.y, s0, t0, s1, t0, s1, t1);
+      drawTriangleWarp(ctx, source, sourceWidth, sourceHeight, d00.x, d00.y, d11.x, d11.y, d01.x, d01.y, s0, t0, s1, t1, s0, t1);
     }
-    const a = ((dx1 - dx0) * (sy2 - sy0) - (dx2 - dx0) * (sy1 - sy0)) / denom;
-    const b = ((dx2 - dx0) * (sx1 - sx0) - (dx1 - dx0) * (sx2 - sx0)) / denom;
-    const c = ((dy1 - dy0) * (sy2 - sy0) - (dy2 - dy0) * (sy1 - sy0)) / denom;
-    const d = ((dy2 - dy0) * (sx1 - sx0) - (dy1 - dy0) * (sx2 - sx0)) / denom;
-    const e = dx0 - a * sx0 - b * sy0;
-    const f = dy0 - c * sx0 - d * sy0;
-    ctx.setTransform(a, c, b, d, e, f);
-    ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
-    ctx.restore();
-  };
-  drawTriangle(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, 0, 0, sourceWidth, 0, sourceWidth, sourceHeight);
-  drawTriangle(p0.x, p0.y, p2.x, p2.y, p3.x, p3.y, 0, 0, sourceWidth, sourceHeight, 0, sourceHeight);
+  }
 }
 
 /** Options for renderTiledWall: lighting, noise, and optional grout. All applied before the final warp. */
@@ -102,6 +161,8 @@ export interface RenderTiledWallOptions {
   lightingStrength?: number;
   /** Monochrome noise opacity 0–1 (e.g. 0.015 = 1.5%) to break tile repetition; 0 = off. */
   noiseOpacity?: number;
+  /** Draw grout lines at tile boundaries for perceived depth. 0 = off; ~0.4 = subtle. */
+  groutOpacity?: number;
 }
 
 /**
@@ -165,6 +226,31 @@ export function renderTiledWall(
   offCtx.fillStyle = pattern;
   offCtx.fillRect(0, 0, wallWidthPx / scaleX, wallHeightPx / scaleY);
   offCtx.restore();
+
+  // --- Grout lines: thin dark lines at tile boundaries for perceived depth (bump effect) ---
+  const groutOpacity = options?.groutOpacity ?? 0;
+  if (groutOpacity > 0 && tilesX > 0 && tilesY > 0) {
+    const stepPxX = wallWidthPx / tilesX;
+    const stepPxY = wallHeightPx / tilesY;
+    offCtx.save();
+    offCtx.strokeStyle = `rgba(50,50,50,${Math.min(1, groutOpacity)})`;
+    offCtx.lineWidth = 1;
+    for (let i = 1; i < Math.ceil(tilesX); i++) {
+      const x = i * stepPxX;
+      offCtx.beginPath();
+      offCtx.moveTo(x, 0);
+      offCtx.lineTo(x, wallHeightPx);
+      offCtx.stroke();
+    }
+    for (let j = 1; j < Math.ceil(tilesY); j++) {
+      const y = j * stepPxY;
+      offCtx.beginPath();
+      offCtx.moveTo(0, y);
+      offCtx.lineTo(wallWidthPx, y);
+      offCtx.stroke();
+    }
+    offCtx.restore();
+  }
 
   // --- Lighting: multiply by wall lighting map (only when provided; avoids TV/chair shadows if map is wall-only) ---
   const lightingCanvas = options?.lightingCanvas;
