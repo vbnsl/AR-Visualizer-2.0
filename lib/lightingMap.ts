@@ -1,12 +1,12 @@
 /**
- * Lighting map from the room image for realistic tile shading.
+ * Lighting map from the room image for realistic tile shading and contact shadows.
  *
- * Used as a multiply layer on the tile so darker wall areas darken the tile. To avoid
- * TV/chair casting shadows, we only sample room pixels where wallMask indicates "wall"
- * (alpha >= WALL_THRESHOLD); non-wall pixels are replaced with the median wall brightness
- * before blur, so the map has no dark object shapes.
+ * Grayscale is taken from the room image; dark pixels (e.g. under sofa and chair legs)
+ * are kept so that when the map is used as a multiply layer, contact shadows anchor
+ * furniture on the tiles. preserveForegroundShadows is true by default; we do not
+ * replace non-wall pixels with median so real-world shadows are captured.
  *
- * Pipeline: crop to quad bbox → grayscale → replace non-wall with wall median → blur → normalize → canvas.
+ * Pipeline: crop to quad bbox → grayscale → blur → normalize to [LIGHTING_FLOOR,255] → canvas.
  */
 
 import type { Quad } from "./tiledWall";
@@ -15,8 +15,8 @@ import { quadToBBox } from "./tiledWall";
 const DEFAULT_BLUR_RADIUS_PX = 40;
 /** Mask alpha >= this treated as "wall"; below = foreground (TV, chair) — not used for lighting sample. */
 const WALL_THRESHOLD = 128;
-/** Minimum value (0–255) in the lighting map; lower allows deeper contact shadows. */
-const LIGHTING_FLOOR = 110;
+/** Minimum value (0–255) in the lighting map; lower allows much darker contact shadows under furniture. */
+const LIGHTING_FLOOR = 85;
 
 function gaussianKernel(radius: number): Float32Array {
   const size = radius * 2 + 1;
@@ -89,7 +89,6 @@ export function extractLightingMap(
     ? blurRadiusPxOrOptions
     : { blurRadiusPx: blurRadiusPxOrOptions };
   const blurRadiusPx = opts.blurRadiusPx ?? DEFAULT_BLUR_RADIUS_PX;
-  const preserveForegroundShadows = opts.preserveForegroundShadows ?? true;
   const bbox = quadToBBox(quad);
   const w = Math.max(1, Math.floor(bbox.width));
   const h = Math.max(1, Math.floor(bbox.height));
@@ -106,37 +105,14 @@ export function extractLightingMap(
   if (!fullCtx) return null;
   fullCtx.drawImage(roomImage, 0, 0, fullWidth, fullHeight);
   const fullData = fullCtx.getImageData(bx, by, cropW, cropH);
-  const maskData = wallMask.data;
 
   const gray = new Float32Array(cropW * cropH);
-  const wallValues: number[] = [];
-
   for (let py = 0; py < cropH; py++) {
     for (let px = 0; px < cropW; px++) {
       const g = 0.299 * fullData.data[(py * cropW + px) * 4] +
         0.587 * fullData.data[(py * cropW + px) * 4 + 1] +
         0.114 * fullData.data[(py * cropW + px) * 4 + 2];
-      const mx = bx + px;
-      const my = by + py;
-      const maskAlpha = maskData[(my * fullWidth + mx) * 4 + 3];
       gray[py * cropW + px] = g;
-      if (maskAlpha >= WALL_THRESHOLD) wallValues.push(g);
-    }
-  }
-
-  if (wallValues.length === 0) return null;
-
-  if (!preserveForegroundShadows) {
-    wallValues.sort((a, b) => a - b);
-    const median = wallValues[Math.floor(wallValues.length * 0.5)];
-    for (let py = 0; py < cropH; py++) {
-      for (let px = 0; px < cropW; px++) {
-        const mx = bx + px;
-        const my = by + py;
-        if (maskData[(my * fullWidth + mx) * 4 + 3] < WALL_THRESHOLD) {
-          gray[py * cropW + px] = median;
-        }
-      }
     }
   }
 
@@ -168,6 +144,77 @@ export function extractLightingMap(
       outData.data[i] = clamped;
       outData.data[i + 1] = clamped;
       outData.data[i + 2] = clamped;
+      outData.data[i + 3] = 255;
+    }
+  }
+  outCtx.putImageData(outData, 0, 0);
+  return out;
+}
+
+/** Luminance threshold above which pixels are treated as highlights (ceiling/light reflections). */
+const SPECULAR_THRESHOLD = 180;
+const SPECULAR_BLUR_RADIUS = 8;
+
+/**
+ * Extracts a specular map from the room image: isolates the brightest pixels (ceiling light
+ * reflections on the floor). Use with screen blend and ~0.3 opacity to give tiles a glossy sheen.
+ * Returns a canvas of size (bbox.width × bbox.height), or null on failure.
+ */
+export function extractSpecularMap(
+  roomImage: HTMLImageElement,
+  quad: Quad,
+  fullWidth: number,
+  fullHeight: number
+): HTMLCanvasElement | null {
+  const bbox = quadToBBox(quad);
+  const w = Math.max(1, Math.floor(bbox.width));
+  const h = Math.max(1, Math.floor(bbox.height));
+  const bx = Math.max(0, Math.min(fullWidth - 1, Math.floor(bbox.x)));
+  const by = Math.max(0, Math.min(fullHeight - 1, Math.floor(bbox.y)));
+  const cropW = Math.min(w, fullWidth - bx);
+  const cropH = Math.min(h, fullHeight - by);
+  if (cropW <= 0 || cropH <= 0) return null;
+
+  const full = document.createElement("canvas");
+  full.width = fullWidth;
+  full.height = fullHeight;
+  const fullCtx = full.getContext("2d");
+  if (!fullCtx) return null;
+  fullCtx.drawImage(roomImage, 0, 0, fullWidth, fullHeight);
+  const fullData = fullCtx.getImageData(bx, by, cropW, cropH);
+
+  const highlight = new Float32Array(cropW * cropH);
+  for (let py = 0; py < cropH; py++) {
+    for (let px = 0; px < cropW; px++) {
+      const L = 0.299 * fullData.data[(py * cropW + px) * 4] +
+        0.587 * fullData.data[(py * cropW + px) * 4 + 1] +
+        0.114 * fullData.data[(py * cropW + px) * 4 + 2];
+      if (L >= SPECULAR_THRESHOLD) {
+        const t = (L - SPECULAR_THRESHOLD) / (255 - SPECULAR_THRESHOLD);
+        highlight[py * cropW + px] = Math.min(255, t * 255);
+      } else {
+        highlight[py * cropW + px] = 0;
+      }
+    }
+  }
+
+  const radius = Math.max(1, Math.min(20, SPECULAR_BLUR_RADIUS));
+  blurChannel(highlight, cropW, cropH, radius);
+
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  const outCtx = out.getContext("2d");
+  if (!outCtx) return null;
+  const outData = outCtx.createImageData(w, h);
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const srcIdx = py < cropH && px < cropW ? py * cropW + px : 0;
+      const v = Math.round(Math.max(0, Math.min(255, highlight[srcIdx])));
+      const i = (py * w + px) * 4;
+      outData.data[i] = v;
+      outData.data[i + 1] = v;
+      outData.data[i + 2] = v;
       outData.data[i + 3] = 255;
     }
   }

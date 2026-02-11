@@ -42,7 +42,7 @@ export function quadToBBox(quad: Quad): WallBBox {
   return { x, y, width, height };
 }
 
-/** Subdivisions for projective homography warp (smoother perspective, tiles converge to vanishing point). */
+/** Subdivisions for projective homography warp; tiles noticeably shrink toward the back (true 3D vanishing point). */
 const HOMOGRAPHY_SUBDIV = 32;
 
 /**
@@ -129,8 +129,8 @@ function drawTriangleWarp(
 }
 
 /**
- * Draw source rectangle onto ctx warped to the destination quad using projective homography.
- * Subdivides into a grid so tiles converge to a vanishing point.
+ * Draw source rectangle onto ctx warped to the destination quad using a true 3x3 homography matrix.
+ * Subdivides into a grid so tiles noticeably shrink as they move toward the back wall.
  */
 function drawQuadWarp(
   ctx: CanvasRenderingContext2D,
@@ -153,15 +153,19 @@ function drawQuadWarp(
   }
 }
 
-/** Options for renderTiledWall: lighting, noise, and optional grout. All applied before the final warp. */
+/** Options for renderTiledWall: lighting, noise, grout, specular. All applied before the final warp. */
 export interface RenderTiledWallOptions {
-  /** Lighting map canvas (size = wall bbox). Applied with multiply blend so tile follows room lighting. */
+  /** Lighting map canvas (size = wall bbox). Applied with multiply blend for contact shadows. */
   lightingCanvas?: HTMLCanvasElement | null;
-  /** Strength of lighting multiply (default 1). Values > 1 apply a second multiply pass for stronger falloff (e.g. floor). */
+  /** Strength of lighting multiply (default 1). Values > 1 apply a second multiply pass (e.g. floor). */
   lightingStrength?: number;
-  /** Monochrome noise opacity 0–1 (e.g. 0.015 = 1.5%) to break tile repetition; 0 = off. */
+  /** Specular map canvas (size = wall bbox). Applied with screen blend for glossy highlights. */
+  specularCanvas?: HTMLCanvasElement | null;
+  /** Opacity of specular overlay (e.g. 0.3 for polished finish). */
+  specularOpacity?: number;
+  /** Monochrome noise opacity 0–1 to break tile repetition; 0 = off. */
   noiseOpacity?: number;
-  /** Draw grout lines at tile boundaries for perceived depth. 0 = off; ~0.4 = subtle. */
+  /** Draw grout lines at tile boundaries for 3D depth. 0 = off; 0.5 = visible. */
   groutOpacity?: number;
 }
 
@@ -227,13 +231,13 @@ export function renderTiledWall(
   offCtx.fillRect(0, 0, wallWidthPx / scaleX, wallHeightPx / scaleY);
   offCtx.restore();
 
-  // --- Grout lines: thin dark lines at tile boundaries for perceived depth (bump effect) ---
-  const groutOpacity = options?.groutOpacity ?? 0.3;
+  // --- Grout lines: dark neutral gray at tile boundaries for 3D depth between tiles ---
+  const groutOpacity = options?.groutOpacity ?? 0.5;
   if (groutOpacity > 0 && tilesX > 0 && tilesY > 0) {
     const stepPxX = wallWidthPx / tilesX;
     const stepPxY = wallHeightPx / tilesY;
     offCtx.save();
-    offCtx.strokeStyle = `rgba(50,50,50,${Math.min(1, groutOpacity)})`;
+    offCtx.strokeStyle = `rgba(42,42,42,${Math.min(1, groutOpacity)})`;
     offCtx.lineWidth = 1;
     for (let i = 1; i < Math.ceil(tilesX); i++) {
       const x = i * stepPxX;
@@ -252,19 +256,29 @@ export function renderTiledWall(
     offCtx.restore();
   }
 
-  // --- Lighting: multiply by lighting map so contact shadows anchor furniture on the tiles ---
+  // Multiply blend: bake the room's real-world shadows onto the tile texture so furniture is anchored.
   const lightingCanvas = options?.lightingCanvas;
   const lightingStrength = Math.max(1, options?.lightingStrength ?? 1);
   if (lightingCanvas && lightingCanvas.width === wallWidthPx && lightingCanvas.height === wallHeightPx) {
     offCtx.globalCompositeOperation = "multiply";
     offCtx.drawImage(lightingCanvas, 0, 0, wallWidthPx, wallHeightPx);
-    // Optional second multiply pass for stronger falloff (e.g. floor receding into room)
     if (lightingStrength > 1) {
       const extra = Math.min(1, lightingStrength - 1);
       offCtx.globalAlpha = extra;
       offCtx.drawImage(lightingCanvas, 0, 0, wallWidthPx, wallHeightPx);
       offCtx.globalAlpha = 1;
     }
+    offCtx.globalCompositeOperation = "source-over";
+  }
+
+  // --- Specular: screen blend highlights (ceiling/light reflections) for glossy sheen ---
+  const specularCanvas = options?.specularCanvas;
+  const specularOpacity = options?.specularOpacity ?? 0.3;
+  if (specularCanvas && specularCanvas.width === wallWidthPx && specularCanvas.height === wallHeightPx && specularOpacity > 0) {
+    offCtx.globalCompositeOperation = "screen";
+    offCtx.globalAlpha = Math.min(1, specularOpacity);
+    offCtx.drawImage(specularCanvas, 0, 0, wallWidthPx, wallHeightPx);
+    offCtx.globalAlpha = 1;
     offCtx.globalCompositeOperation = "source-over";
   }
 

@@ -21,7 +21,7 @@ import {
   guidedFilterMask,
 } from "@/lib/occlusionMask";
 import { createFeatheredQuadMask } from "@/lib/featherMask";
-import { extractLightingMap } from "@/lib/lightingMap";
+import { extractLightingMap, extractSpecularMap } from "@/lib/lightingMap";
 import type { DepthResult } from "@/lib/depth";
 import { quadToBBox } from "@/lib/tiledWall";
 
@@ -254,9 +254,16 @@ export default function TileOverlayCanvas({
     if (lightingCanvas && (lightingCanvas.width !== wallW || lightingCanvas.height !== wallH)) {
       lightingCanvas = null;
     }
+    let specularCanvas: HTMLCanvasElement | null = null;
+    if (roomImageRef.current && surface === "floor") {
+      specularCanvas = extractSpecularMap(roomImageRef.current, quad, width, height);
+      if (specularCanvas && (specularCanvas.width !== wallW || specularCanvas.height !== wallH)) {
+        specularCanvas = null;
+      }
+    }
 
-    // Render tiled wall to offscreen then destination-in with combined mask.
-    // Lighting is applied with multiply in renderTiledWall so contact shadows anchor furniture on the tiles.
+    // Order: Draw tiled floor → multiply lighting map (contact shadows) → screen specular map (highlights).
+    // Lighting uses ctx.globalCompositeOperation = 'multiply'; specular uses 'screen' at ~0.3 opacity.
     const off = document.createElement("canvas");
     off.width = width;
     off.height = height;
@@ -265,8 +272,10 @@ export default function TileOverlayCanvas({
       renderTiledWall(offCtx, quad, img, tileMm, wallSizeMm, {
         lightingCanvas: lightingCanvas ?? undefined,
         lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
+        specularCanvas: specularCanvas ?? undefined,
+        specularOpacity: 0.3,
         noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
-        groutOpacity: 0.3,
+        groutOpacity: 0.5,
       });
       // Floor only: darken the "far" (top) part of the quad to suggest depth
       if (surface === "floor" && FLOOR_DEPTH_GRADIENT_STRENGTH > 0) {
@@ -349,8 +358,10 @@ export default function TileOverlayCanvas({
       renderTiledWall(ctx, quad, img, tileMm, wallSizeMm, {
         lightingCanvas: lightingCanvas ?? undefined,
         lightingStrength: surface === "floor" ? FLOOR_LIGHTING_STRENGTH : undefined,
+        specularCanvas: specularCanvas ?? undefined,
+        specularOpacity: 0.3,
         noiseOpacity: surface === "floor" ? FLOOR_NOISE_OPACITY : NOISE_OPACITY,
-        groutOpacity: 0.3,
+        groutOpacity: 0.5,
       });
     }
   }, [corners, imageReady, roomImageReady, width, height, tileSizeMm, depthMap, depthCloserIsHigher, wallMask, edgeMask, surface]);
