@@ -6,9 +6,11 @@ import TilePicker from "@/components/TilePicker";
 import CornerHandles, { type Point } from "@/components/CornerHandles";
 import VisualizerCanvas from "@/components/VisualizerCanvas";
 import TileOverlayCanvas from "@/components/TileOverlayCanvas";
-import { TILE_CATALOG, type TileProduct } from "@/lib/catalog";
+import { useTileCatalog, tilesForSurface, type TileProduct } from "@/lib/catalog";
 import { estimateDepth, type DepthResult } from "@/lib/depth";
-import { segmentWall } from "@/lib/wallSegmentation";
+import { segmentWall, segmentFloor } from "@/lib/wallSegmentation";
+
+type ViewMode = "wall" | "floor";
 
 /** Max size of the room view so it doesn't dominate the screen; image fits inside and keeps aspect ratio. */
 const MAX_VIEW_WIDTH = 960;
@@ -37,8 +39,11 @@ export default function VisualizerPage() {
     width: number;
     height: number;
   } | null>(null);
-  const [corners, setCorners] = useState<Point[]>([]);
-  const [selectedTile, setSelectedTile] = useState<TileProduct | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("wall");
+  const [wallCorners, setWallCorners] = useState<Point[]>([]);
+  const [floorCorners, setFloorCorners] = useState<Point[]>([]);
+  const [selectedWallTile, setSelectedWallTile] = useState<TileProduct | null>(null);
+  const [selectedFloorTile, setSelectedFloorTile] = useState<TileProduct | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [depthMap, setDepthMap] = useState<DepthResult | null>(null);
   const [depthLoading, setDepthLoading] = useState(false);
@@ -46,10 +51,20 @@ export default function VisualizerPage() {
   const [wallMask, setWallMask] = useState<ImageData | null>(null);
   const [wallMaskLoading, setWallMaskLoading] = useState(false);
   const [wallMaskError, setWallMaskError] = useState<string | null>(null);
+  const [floorMask, setFloorMask] = useState<ImageData | null>(null);
+  const [floorMaskLoading, setFloorMaskLoading] = useState(false);
+  const [floorMaskError, setFloorMaskError] = useState<string | null>(null);
   const [depthCloserIsHigher, setDepthCloserIsHigher] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const compositeRef = useRef<HTMLDivElement>(null);
+
+  const { catalog, loading: catalogLoading, error: catalogError } = useTileCatalog();
+  const corners = viewMode === "wall" ? wallCorners : floorCorners;
+  const surfaceMask = viewMode === "wall" ? wallMask : floorMask;
+  const tilesForCurrentSurface = tilesForSurface(catalog, viewMode);
+  const selectedTile = viewMode === "wall" ? selectedWallTile : selectedFloorTile;
+  const setSelectedTile = viewMode === "wall" ? setSelectedWallTile : setSelectedFloorTile;
 
   // Load room image dimensions so we can size the view without stretching
   useEffect(() => {
@@ -78,13 +93,17 @@ export default function VisualizerPage() {
 
   const handleImageLoad = useCallback((url: string) => {
     setRoomImageUrl(url);
-    setCorners([]);
+    setWallCorners([]);
+    setFloorCorners([]);
     setDepthMap(null);
     setDepthError(null);
     setWallMask(null);
     setWallMaskError(null);
+    setFloorMask(null);
+    setFloorMaskError(null);
     setDepthLoading(true);
     setWallMaskLoading(true);
+    setFloorMaskLoading(true);
     estimateDepth(url)
       .then(setDepthMap)
       .catch((err) => {
@@ -101,6 +120,14 @@ export default function VisualizerPage() {
         setWallMaskError(msg);
       })
       .finally(() => setWallMaskLoading(false));
+    segmentFloor(url, 512, 512)
+      .then((res) => (res ? setFloorMask(res.mask) : setFloorMask(null)))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "Floor segmentation failed";
+        console.warn("[floor-seg]", msg, err);
+        setFloorMaskError(msg);
+      })
+      .finally(() => setFloorMaskLoading(false));
   }, []);
 
   const handleCanvasClick = useCallback(
@@ -110,36 +137,53 @@ export default function VisualizerPage() {
       const rect = el.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      setCorners((prev) => [...prev, { x, y }]);
+      const point = { x, y };
+      if (viewMode === "wall") setWallCorners((prev) => [...prev, point]);
+      else setFloorCorners((prev) => [...prev, point]);
     },
-    [corners.length]
+    [corners.length, viewMode]
   );
 
-  const handleCornerMove = useCallback((index: number, x: number, y: number) => {
-    setCorners((prev) => {
-      const next = [...prev];
-      if (index >= 0 && index < next.length) next[index] = { x, y };
-      return next;
-    });
-  }, []);
+  const handleCornerMove = useCallback(
+    (index: number, x: number, y: number) => {
+      if (viewMode === "wall") {
+        setWallCorners((prev) => {
+          const next = [...prev];
+          if (index >= 0 && index < next.length) next[index] = { x, y };
+          return next;
+        });
+      } else {
+        setFloorCorners((prev) => {
+          const next = [...prev];
+          if (index >= 0 && index < next.length) next[index] = { x, y };
+          return next;
+        });
+      }
+    },
+    [viewMode]
+  );
 
-  const handleResetCorners = useCallback(() => setCorners([]), []);
+  const handleResetCorners = useCallback(() => {
+    if (viewMode === "wall") setWallCorners([]);
+    else setFloorCorners([]);
+  }, [viewMode]);
 
   const handleDownload = useCallback(() => {
     const container = compositeRef.current;
     const canvases = container?.querySelectorAll("canvas");
     if (!canvases?.length) return;
     const roomCanvas = canvases[0] as HTMLCanvasElement;
-    const overlayCanvas = canvases.length >= 2 ? (canvases[1] as HTMLCanvasElement) : null;
-    const w = overlayCanvas ? overlayCanvas.width : roomCanvas.width;
-    const h = overlayCanvas ? overlayCanvas.height : roomCanvas.height;
+    const w = roomCanvas.width;
+    const h = roomCanvas.height;
     const off = document.createElement("canvas");
     off.width = w;
     off.height = h;
     const ctx = off.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(roomCanvas, 0, 0, roomCanvas.width, roomCanvas.height, 0, 0, w, h);
-    if (overlayCanvas) ctx.drawImage(overlayCanvas, 0, 0);
+    for (let i = 1; i < canvases.length; i++) {
+      ctx.drawImage(canvases[i] as HTMLCanvasElement, 0, 0);
+    }
     const url = off.toDataURL("image/png");
     const a = document.createElement("a");
     a.href = url;
@@ -148,7 +192,14 @@ export default function VisualizerPage() {
   }, []);
 
   const canPlaceCorners = roomImageUrl && corners.length < 4;
-  const canDownload = roomImageUrl && corners.length === 4;
+  const hasWallOverlay = wallCorners.length === 4 && selectedWallTile;
+  const hasFloorOverlay = floorCorners.length === 4 && selectedFloorTile;
+  const canDownload = roomImageUrl && (hasWallOverlay || hasFloorOverlay);
+  const surfaceLabel = viewMode === "wall" ? "Wall" : "Floor";
+  const cornerOrderHint =
+    viewMode === "wall"
+      ? "top-left → top-right → bottom-right → bottom-left"
+      : "near-left → near-right → far-right → far-left";
 
   return (
     <div className="flex h-screen flex-col bg-slate-950 text-slate-200">
@@ -167,13 +218,38 @@ export default function VisualizerPage() {
 
           {roomImageUrl && (
             <>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("wall")}
+                  className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                    viewMode === "wall"
+                      ? "border-blue-500 bg-blue-500/20 text-blue-300"
+                      : "border-slate-600 text-slate-400 hover:border-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  Wall
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("floor")}
+                  className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                    viewMode === "floor"
+                      ? "border-blue-500 bg-blue-500/20 text-blue-300"
+                      : "border-slate-600 text-slate-400 hover:border-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  Floor
+                </button>
+              </div>
+
               <div>
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
-                  Wall corners
+                  {surfaceLabel} corners
                 </p>
-                {(depthLoading || wallMaskLoading) && (
+                {(depthLoading || (viewMode === "wall" ? wallMaskLoading : floorMaskLoading)) && (
                   <p className="mb-2 text-sm text-amber-400">
-                    Computing depth &amp; wall detection…
+                    Computing depth &amp; {viewMode} detection…
                   </p>
                 )}
                 {depthError && (
@@ -181,16 +257,24 @@ export default function VisualizerPage() {
                     Depth: {depthError}
                   </p>
                 )}
-                {wallMaskError && !depthMap && (
+                {viewMode === "wall" && wallMaskError && !depthMap && (
                   <p className="mb-2 text-sm text-amber-500" title={wallMaskError}>
                     Wall detection: {wallMaskError}
                   </p>
                 )}
-                {(depthMap || wallMask) && !depthLoading && !wallMaskLoading && (
-                  <p className="mb-2 text-sm text-slate-500">
-                    Occlusion ready {depthMap ? "(depth)" : wallMask ? "(DeepLab wall)" : ""}
+                {viewMode === "floor" && floorMaskError && !depthMap && (
+                  <p className="mb-2 text-sm text-amber-500" title={floorMaskError}>
+                    Floor detection: {floorMaskError}
                   </p>
                 )}
+                {(depthMap || surfaceMask) &&
+                  !depthLoading &&
+                  !(viewMode === "wall" ? wallMaskLoading : floorMaskLoading) && (
+                    <p className="mb-2 text-sm text-slate-500">
+                      Occlusion ready{" "}
+                      {depthMap ? "(depth)" : surfaceMask ? `(DeepLab ${viewMode})` : ""}
+                    </p>
+                  )}
                 {depthMap && (
                   <label className="mb-2 flex items-center gap-2 text-sm text-slate-400">
                     <input
@@ -199,12 +283,12 @@ export default function VisualizerPage() {
                       onChange={(e) => setDepthCloserIsHigher(e.target.checked)}
                       className="rounded border-slate-600 bg-slate-800"
                     />
-                    Depth: higher = closer (toggle if wall/objects are swapped)
+                    Depth: higher = closer (toggle if surface/objects are swapped)
                   </label>
                 )}
                 <p className="mb-2 text-sm text-slate-400">
                   {corners.length < 4
-                    ? `Click on the image to place corner ${corners.length + 1} of 4 (top-left → top-right → bottom-right → bottom-left).`
+                    ? `Click to place corner ${corners.length + 1} of 4 (${cornerOrderHint}).`
                     : "Drag the blue handles to adjust corners."}
                 </p>
                 {corners.length > 0 && (
@@ -218,11 +302,28 @@ export default function VisualizerPage() {
                 )}
               </div>
 
-              <TilePicker
-                tiles={TILE_CATALOG}
-                selectedId={selectedTile?.id ?? null}
-                onSelect={setSelectedTile}
-              />
+              <div>
+                {catalogLoading && (
+                  <p className="mb-2 text-sm text-slate-500">Loading tiles…</p>
+                )}
+                {catalogError && (
+                  <p className="mb-2 text-sm text-amber-500" title={catalogError}>
+                    {catalogError} Add images to <code className="text-xs">public/tiles/wall</code> or{" "}
+                    <code className="text-xs">public/tiles/floor</code> (or <code className="text-xs">both</code>).
+                  </p>
+                )}
+                {!catalogLoading && !catalogError && tilesForCurrentSurface.length === 0 && (
+                  <p className="mb-2 text-sm text-slate-500">
+                    No {viewMode} tiles. Add images to <code className="text-xs">public/tiles/{viewMode}</code> or{" "}
+                    <code className="text-xs">public/tiles/both</code>.
+                  </p>
+                )}
+                <TilePicker
+                  tiles={tilesForCurrentSurface}
+                  selectedId={selectedTile?.id ?? null}
+                  onSelect={setSelectedTile}
+                />
+              </div>
 
               {canDownload && (
                 <button
@@ -274,17 +375,32 @@ export default function VisualizerPage() {
                   height={displaySize.height}
                   containerRef={canvasContainerRef}
                 />
-                <TileOverlayCanvas
-                  corners={corners}
-                  tileImageUrl={selectedTile?.imageUrl ?? null}
-                  tileSizeMm={selectedTile?.sizeMm}
-                  width={displaySize.width}
-                  height={displaySize.height}
-                  depthMap={depthMap}
-                  depthCloserIsHigher={depthCloserIsHigher}
-                  wallMask={wallMask}
-                  roomImageUrl={roomImageUrl}
-                />
+                {hasWallOverlay && (
+                  <TileOverlayCanvas
+                    corners={wallCorners}
+                    tileImageUrl={selectedWallTile?.imageUrl ?? null}
+                    tileSizeMm={selectedWallTile?.sizeMm}
+                    width={displaySize.width}
+                    height={displaySize.height}
+                    depthMap={depthMap}
+                    depthCloserIsHigher={depthCloserIsHigher}
+                    wallMask={wallMask}
+                    roomImageUrl={roomImageUrl}
+                  />
+                )}
+                {hasFloorOverlay && (
+                  <TileOverlayCanvas
+                    corners={floorCorners}
+                    tileImageUrl={selectedFloorTile?.imageUrl ?? null}
+                    tileSizeMm={selectedFloorTile?.sizeMm}
+                    width={displaySize.width}
+                    height={displaySize.height}
+                    depthMap={depthMap}
+                    depthCloserIsHigher={depthCloserIsHigher}
+                    wallMask={floorMask}
+                    roomImageUrl={roomImageUrl}
+                  />
+                )}
               </div>
               {roomImageUrl && corners.length > 0 && (
                 <CornerHandles
@@ -292,6 +408,7 @@ export default function VisualizerPage() {
                   onMove={handleCornerMove}
                   containerWidth={displaySize.width}
                   containerHeight={displaySize.height}
+                  variant={viewMode}
                 />
               )}
             </div>

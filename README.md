@@ -39,9 +39,15 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Adding your own tile images
 
-**Just drop image files into `public/tiles/`.** The app discovers them automatically—no code changes.
+**Drop image files into the folder that matches the surface:**
 
-- **Supported formats:** JPG, PNG, WebP, SVG, GIF  
+- **`public/tiles/wall/`** — tiles appear only in the Wall viewer
+- **`public/tiles/floor/`** — tiles appear only in the Floor viewer
+- **`public/tiles/both/`** — tiles appear in both Wall and Floor pickers
+
+The app discovers tiles via the API (folder = surface). No code changes needed.
+
+- **Supported formats:** JPG, PNG, WebP, SVG, GIF, AVIF  
 - **Display names** are generated from filenames (e.g. `my-marble-tile.jpg` → “My Marble Tile”). Use hyphens or underscores for multi-word names.  
 - Refresh the page after adding or removing files to see the updated list.
 
